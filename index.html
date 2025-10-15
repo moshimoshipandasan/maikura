@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Block World</title>
+    <link rel="stylesheet" href="index.css">
+    <!-- Three.jsライブラリをインポート -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <!-- ポインターロックコントロールをインポート -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
+</head>
+<body>
+    <div id="blocker">
+        <div id="instructions">
+            <span style="font-size:36px">クリックしてプレイ</span>
+            <br /><br />
+            移動: WASD<br/>
+            ジャンプ: スペースキー<br/>
+            視点操作: マウス<br/>
+            ブロックを置く: 右クリック<br/>
+            ブロックを壊す: 左クリック
+        </div>
+    </div>
+    <div id="crosshair">+</div>
+    <script type="module" src="index.tsx"></script>
+</body>
+</html>
