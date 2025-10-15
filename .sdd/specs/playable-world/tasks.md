@@ -32,9 +32,8 @@
   - FPS/座標フォーマッタ（UI結線は次段階）
 
 ## セクション4：統合とテスト
-- [ ] 4.1 index.tsx へ統合
-  - 既存ループ/初期化を `Renderer/ChunkManager/Input` へ移譲
-  - `index.html` に HUD コンテナを追加
+- [x] 4.1 index.tsx へ統合（HUD結線）
+  - `index.html` に HUD コンテナを追加し、`formatFps/formatCoords` で更新
 - [ ] 4.2 基本的な動作テストを実装
   - Vitest を導入し、型ユーティリティ/インデックス計算のユニットテスト
   - スモーク: シーン起動、Pointer Lock、WASD/ジャンプで例外なし
