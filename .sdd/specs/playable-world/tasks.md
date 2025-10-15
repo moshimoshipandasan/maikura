@@ -9,9 +9,9 @@
   - CRUD: `loadDelta/saveDelta/clearWorld`、メモリフォールバック
 
 ## セクション2：ビジネスロジック実装
-- [ ] 2.1 WorldGeneratorWorker を実装（`src/world/generator.worker.ts`）
+- [x] 2.1 WorldGeneratorWorker を実装（`src/world/generator.worker.ts`）
   - 16×16×H の高さ関数（現状 sin/cos、拡張で Simplex）
-  - design.md 処理フロー(2) に対応
+  - design.md 処理フロー(2) に対応（純関数 `generateChunk` + Worker 薄ラッパ）
 - [ ] 2.2 MesherWorker を実装（`src/world/mesher.worker.ts`）
   - InstancedMesh 版を先行し、Greedy への切替余地を残す
   - design.md 処理フロー(3) に対応
