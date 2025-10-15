@@ -130,7 +130,8 @@ for (let x = -worldSize / 2; x < worldSize / 2; x++) {
         // sinとcosを使って滑らかな地形を生成
         const height = Math.floor(Math.cos(x / 8) * 4 + Math.sin(z / 8) * 4) + 8;
         for (let y = 0; y < height; y++) {
-            const material = y === height - 1 ? grassMaterial : (y > height - 4 ? dirtMaterial : stoneMaterial); // 草、土、石
+            const isTop = y === height - 1;
+            const material = isTop ? grassMaterials : (y > height - 4 ? matDirt : matStone); // 草（面別）/ 土 / 石
             const cube = new THREE.Mesh(cubeGeometry, material);
             cube.position.set(x, y + 0.5, z);
             // 静的ブロックは影のキャストを無効化（大量オブジェクトでのコスト削減）
