@@ -35,7 +35,8 @@ scene.add(directionalLight);
 
 // --- ワールド生成 ---
 const objects = [];
-const worldSize = 32; // パフォーマンス安定のため初期サイズを抑える
+// ワールドを拡張（元: 32）。描画/操作の安定性と相談し 64 に調整。
+const worldSize = 64;
 const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
 // マテリアルは再利用してメモリとパフォーマンスを最適化
 const grassMaterial = new THREE.MeshLambertMaterial({ color: 0x4caf50 });
@@ -173,6 +174,11 @@ const rollOverMesh = new THREE.Mesh(
 );
 scene.add(rollOverMesh);
 
+// 物理・接地判定用レイ（編集とは別に持つ）
+const groundRay = new THREE.Raycaster();
+const sideRay = new THREE.Raycaster();
+const DOWN = new THREE.Vector3(0, -1, 0);
+
 document.addEventListener('mousedown', (event) => {
     if (!controls.isLocked) return;
 
@@ -232,25 +238,79 @@ function animate() {
         if (moveState.forward || moveState.backward) playerVelocity.z -= playerDirection.z * speed * delta * 10;
         if (moveState.left || moveState.right) playerVelocity.x -= playerDirection.x * speed * delta * 10;
 
-        // 移動を適用
-        controls.moveRight(-playerVelocity.x * delta);
-        controls.moveForward(-playerVelocity.z * delta);
-        controls.getObject().position.y += playerVelocity.y * delta;
+        // ---- 安全な水平移動の算出（壁めり込み防止 + ステップアップ対応）----
+        const playerObj = controls.getObject();
+        const playerPos = playerObj.position;
+        const playerHeight = 1.75;   // 目線高（カメラ基準）
+        const playerRadius = 0.35;   // カプセル半径相当（壁との最小距離）
+        const stepHeight = 0.6;      // 1ブロック弱の段差を乗り越え可能
+
+        // 提案水平移動量
+        let dx = -playerVelocity.x * delta;
+        let dz = -playerVelocity.z * delta;
+
+        // 横壁ヒット時にスライド/停止させる（足元高さでチェック）
+        const footY = playerPos.y - (playerHeight - 0.1);
+        const moveLen = Math.hypot(dx, dz);
+        if (moveLen > 1e-6) {
+            const dir = new THREE.Vector3(dx / moveLen, 0, dz / moveLen);
+            sideRay.set(new THREE.Vector3(playerPos.x, footY, playerPos.z), dir);
+            sideRay.near = 0;
+            sideRay.far = moveLen + playerRadius;
+            const hits = sideRay.intersectObjects(objects, false);
+            if (hits.length > 0) {
+                const h = hits[0];
+                const allow = Math.max(0, h.distance - playerRadius);
+                dx = dir.x * allow;
+                dz = dir.z * allow;
+            }
+        }
+
+        // 先の足元で接地面が少し高い場合はステップアップ
+        const probeX = playerPos.x + Math.sign(dx || 0) * 0.35;
+        const probeZ = playerPos.z + Math.sign(dz || 0) * 0.35;
+        const currentGround = (() => {
+            groundRay.set(new THREE.Vector3(playerPos.x, playerPos.y + 0.5, playerPos.z), DOWN);
+            groundRay.near = 0; groundRay.far = playerHeight + 2;
+            const g = groundRay.intersectObjects(objects, false);
+            return g.length ? g[0].point.y : -Infinity;
+        })();
+        const aheadGround = (() => {
+            groundRay.set(new THREE.Vector3(probeX, playerPos.y + 0.5, probeZ), DOWN);
+            groundRay.near = 0; groundRay.far = playerHeight + 2;
+            const g = groundRay.intersectObjects(objects, false);
+            return g.length ? g[0].point.y : -Infinity;
+        })();
+        if (aheadGround > -Infinity && currentGround > -Infinity) {
+            const diff = aheadGround - currentGround;
+            if (diff > 0 && diff <= stepHeight && playerVelocity.y <= 0.01) {
+                // 段差に自然に乗る
+                playerPos.y = aheadGround + playerHeight;
+                playerVelocity.y = 0;
+                canJump = true;
+            }
+        }
+
+        // 移動を適用（安全に制限された dx/dz を使用）
+        if (dx) controls.moveRight(dx);
+        if (dz) controls.moveForward(dz);
+        playerObj.position.y += playerVelocity.y * delta;
         
         // 衝突判定
-        const playerPos = controls.getObject().position;
-        raycaster.set(playerPos, new THREE.Vector3(0, -1, 0));
-        const groundIntersections = raycaster.intersectObjects(objects, false);
+        const playerPos2 = controls.getObject().position;
+        groundRay.set(playerPos2, DOWN);
+        groundRay.near = 0; groundRay.far = playerHeight + 2;
+        const groundIntersections = groundRay.intersectObjects(objects, false);
 
-        if (groundIntersections.length > 0 && groundIntersections[0].distance < 1.75) {
-            playerPos.y = groundIntersections[0].point.y + 1.75;
+        if (groundIntersections.length > 0 && groundIntersections[0].distance < playerHeight) {
+            playerPos2.y = groundIntersections[0].point.y + playerHeight;
             playerVelocity.y = 0;
             canJump = true;
         }
 
-        if (playerPos.y < -20) { // ワールドから落ちた場合のリセット
+        if (playerPos2.y < -20) { // ワールドから落ちた場合のリセット
             playerVelocity.y = 0;
-            playerPos.set(0, 20, 0);
+            playerPos2.set(0, 20, 0);
         }
         
         // ブロック設置/破壊用のヘルパー表示
