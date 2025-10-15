@@ -35,8 +35,8 @@
 - [x] 4.1 index.tsx へ統合（HUD結線）
   - `index.html` に HUD コンテナを追加し、`formatFps/formatCoords` で更新
 - [ ] 4.2 基本的な動作テストを実装
-  - Vitest を導入し、型ユーティリティ/インデックス計算のユニットテスト
-  - スモーク: シーン起動、Pointer Lock、WASD/ジャンプで例外なし
+  - [x] ユニット: types/store/generator/mesher/chunkManager/renderer/hud/input/raycast を追加し全件PASS
+  - [ ] スモーク（手動）: シーン起動→ロック→WASD/ジャンプ→設置/破壊が例外なし（`npm run dev`）
 - [ ] 4.3 受入基準の確認
   - フルHD・DPR≤2・既定描画距離で 60fps 目標（最低30fps）
   - 100回連続の設置/破壊で位置誤差 ±0.01 以内
