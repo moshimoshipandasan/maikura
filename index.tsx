@@ -246,20 +246,60 @@ function animate() {
         if (moveState.forward || moveState.backward) playerVelocity.z -= playerDirection.z * speed * delta * 10;
         if (moveState.left || moveState.right) playerVelocity.x -= playerDirection.x * speed * delta * 10;
 
-        // 移動を適用
-        controls.moveRight(-playerVelocity.x * delta);
-        controls.moveForward(-playerVelocity.z * delta);
+        // 移動を適用（地形に沿ってスライド）
+        const forward = new THREE.Vector3();
+        camera.getWorldDirection(forward); forward.y = 0; forward.normalize();
+        const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), forward).normalize();
+        let disp = new THREE.Vector3()
+          .addScaledVector(right, -playerVelocity.x * delta)
+          .addScaledVector(forward, -playerVelocity.z * delta);
+
+        const _all = terrainMeshes.concat(objects);
+        const len = disp.length();
+        if (len > 1e-6) {
+            raycaster.ray.origin.copy(controls.getObject().position);
+            raycaster.ray.direction.copy(disp).normalize();
+            raycaster.near = 0; raycaster.far = 0.5; // カプセル半径相当
+            const hit = raycaster.intersectObjects(_all, false);
+            if (hit.length > 0 && hit[0].distance < 0.5) {
+                const n = hit[0].face.normal;
+                // 法線方向の成分を除去してスライド
+                const dot = disp.dot(n);
+                disp.addScaledVector(n, -dot);
+                // 簡易ステップアップ: 少し持ち上げて再サンプル
+                const trial = controls.getObject().position.clone().add(disp).add(new THREE.Vector3(0, 0.6, 0));
+                raycaster.ray.origin.copy(trial);
+                raycaster.ray.direction.set(0, -1, 0); raycaster.far = 1.2;
+                const step = raycaster.intersectObjects(_all, false);
+                if (step.length > 0) {
+                    controls.getObject().position.copy(trial);
+                    controls.getObject().position.y = step[0].point.y + 1.75;
+                }
+            }
+        }
+        controls.getObject().position.add(disp);
         controls.getObject().position.y += playerVelocity.y * delta;
         
-        // 衝突判定
+        // 衝突判定（地形に埋まらないようフォールバックつき）
         const playerPos = controls.getObject().position;
-        raycaster.set(playerPos, new THREE.Vector3(0, -1, 0));
-        const groundIntersections = raycaster.intersectObjects(terrainMeshes.concat(objects), false);
-
-        if (groundIntersections.length > 0 && groundIntersections[0].distance < 1.75) {
-            playerPos.y = groundIntersections[0].point.y + 1.75;
+        raycaster.ray.origin.copy(playerPos);
+        raycaster.ray.direction.set(0, -1, 0);
+        raycaster.near = 0; raycaster.far = 3.5; // 足元付近のみ
+        let gi = raycaster.intersectObjects(_all, false);
+        if (gi.length > 0 && gi[0].distance < 1.8) {
+            playerPos.y = gi[0].point.y + 1.75;
             playerVelocity.y = 0;
             canJump = true;
+        } else {
+            // もし地面の中に入ってしまった場合に備え、頭上からもサンプルして補正
+            raycaster.ray.origin.set(playerPos.x, playerPos.y + 5, playerPos.z);
+            raycaster.far = 10;
+            gi = raycaster.intersectObjects(_all, false);
+            if (gi.length > 0 && playerPos.y <= gi[0].point.y + 1.8) {
+                playerPos.y = gi[0].point.y + 1.75;
+                playerVelocity.y = Math.max(playerVelocity.y, 0);
+                canJump = true;
+            }
         }
 
         if (playerPos.y < -20) { // ワールドから落ちた場合のリセット
@@ -283,7 +323,9 @@ function animate() {
     const upd = chunkManager.updatePlayerPosition(controls.getObject().position.x, controls.getObject().position.z);
     for (const k of upd.unload) unloadChunkByKey(k);
     let processed = 0; let req;
-    while (processed < 1 && (req = chunkManager.nextRequest())) { buildChunkMesh(req.cx, req.cz); processed++; }renderer.render(scene, camera);
+    while (processed < 1 && (req = chunkManager.nextRequest())) { buildChunkMesh(req.cx, req.cz); processed++; }
+
+        renderer.render(scene, camera);
 
     // HUD 更新
     const fpsEl = document.getElementById('fps');
@@ -397,3 +439,14 @@ applyEdits();
     rightClick: () => document.dispatchEvent(new MouseEvent('mousedown', { button: 2 })),
     leftClick: () => document.dispatchEvent(new MouseEvent('mousedown', { button: 0 })),
 };
+
+
+
+
+
+
+
+
+
+
+
