@@ -245,21 +245,27 @@ function animate() {
         const playerPos = playerObj.position;
         const playerHeight = 1.75;   // 目線高（カメラ基準）
         const playerRadius = 0.35;   // カプセル半径相当（壁との最小距離）
-        const smallStep = 0.2;       // 微小段差（そのまま踏破）
+        const smallStep = 0.15;      // 微小段差（そのまま踏破）
         const maxAutoJump = 1.2;     // オートジャンプで越えられる最大段差（~1ブロック）
         const jumpImpulse = 10;      // Space と同じジャンプ力
         const autoJumpEnabled = true;
 
-        // 提案水平移動量
-        let dx = -playerVelocity.x * delta;
-        let dz = -playerVelocity.z * delta;
+        // 提案水平移動量（カメラ軸）
+        let dx = -playerVelocity.x * delta; // 右(+)/左(-)
+        let dz = -playerVelocity.z * delta; // 前(+)/後(-)
+
+        // カメラ軸 → ワールド軸に変換して実際の移動方向を得る
+        const camForward = new THREE.Vector3();
+        controls.getDirection(camForward); camForward.y = 0; camForward.normalize();
+        const camRight = new THREE.Vector3().copy(camForward).cross(UP).normalize();
+        const moveWorld = new THREE.Vector3().addScaledVector(camRight, dx).addScaledVector(camForward, dz);
 
         // 横壁ヒット時にスライド/停止させる（足元高さでチェック）
-        const footY = playerPos.y - (playerHeight - 0.1);
-        const moveLen = Math.hypot(dx, dz);
+        const footY = playerPos.y - (playerHeight - 0.2);
+        const moveLen = moveWorld.length();
         let blocked = false;
         if (moveLen > 1e-6) {
-            const dir = new THREE.Vector3(dx / moveLen, 0, dz / moveLen);
+            const dir = moveWorld.clone().divideScalar(moveLen);
             sideRay.set(new THREE.Vector3(playerPos.x, footY, playerPos.z), dir);
             sideRay.near = 0;
             sideRay.far = moveLen + playerRadius;
@@ -267,15 +273,18 @@ function animate() {
             if (hits.length > 0) {
                 const h = hits[0];
                 const allow = Math.max(0, h.distance - playerRadius);
-                dx = dir.x * allow;
-                dz = dir.z * allow;
-                blocked = allow + 1e-4 < moveLen; // 進行方向が抑制された
+                // 許容移動ベクトル（ワールド）をカメラ軸へ逆投影して moveRight/moveForward に反映
+                const allowedWorld = dir.clone().multiplyScalar(allow);
+                dx = allowedWorld.dot(camRight);
+                dz = allowedWorld.dot(camForward);
+                blocked = allow + 0.02 < moveLen; // 進行量が抑制された（ヒステリシス）
             }
         }
 
         // 先の足元で接地面が少し高い場合はステップアップ
-        const probeX = playerPos.x + Math.sign(dx || 0) * 0.35;
-        const probeZ = playerPos.z + Math.sign(dz || 0) * 0.35;
+        const aheadProbe = moveLen > 1e-6 ? moveWorld.clone().setLength(playerRadius + 0.1) : new THREE.Vector3();
+        const probeX = playerPos.x + aheadProbe.x;
+        const probeZ = playerPos.z + aheadProbe.z;
         const currentGround = (() => {
             groundRay.set(new THREE.Vector3(playerPos.x, playerPos.y + 0.5, playerPos.z), DOWN);
             groundRay.near = 0; groundRay.far = playerHeight + 2;
