@@ -16,7 +16,8 @@ describe('raycast: decideAction', () => {
       {distance:5.0, objectId:2, faceNormal:[0,1,0], position:[1,2,3]},
     ]});
     expect(res.type).toBe('hit');
-    expect(res.target?.objectId).toBe(2);
+    if (res.type !== 'hit') throw new Error('expected hit');
+    expect(res.target.objectId).toBe(2);
   });
 });
 
