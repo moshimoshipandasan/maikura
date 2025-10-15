@@ -8,6 +8,10 @@
 declare const THREE: any;
 import { formatFps, formatCoords } from './src/world/hud.ts';
 import { FpsLogger, AutoPlayer, installValidationHotkeys, registerValidationContext, runEditStressTest } from './src/world/validation.ts';
+import { ChunkManager } from './src/world/chunkManager.ts';
+import { generateChunk } from './src/world/generator.ts';
+import { meshChunk } from './src/world/mesher.ts';
+import { CHUNK_SIZE } from './src/world/types.ts';
 
 // --- シーン、カメラ、レンダラーのセットアップ ---
 const scene = new THREE.Scene();
@@ -33,9 +37,9 @@ directionalLight.shadow.mapSize.width = 2048;
 directionalLight.shadow.mapSize.height = 2048;
 scene.add(directionalLight);
 
-// --- ワールド生成 ---
-const objects = [];
-const worldSize = 32; // パフォーマンス安定のため初期サイズを抑える
+// --- ワールド（チャンク）生成 ---
+const objects: any[] = []; // ユーザーが設置したブロック（個別メッシュ）
+const terrainMeshes: any[] = []; // チャンクの地形メッシュ
 const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
 // マテリアルは再利用してメモリとパフォーマンスを最適化
 const grassMaterial = new THREE.MeshLambertMaterial({ color: 0x4caf50 });
@@ -54,25 +58,35 @@ const materials = [
 let selectedIndex = 2; // Stone
 function getSelectedMaterial() { return materials[selectedIndex].mat; }
 
-for (let x = -worldSize / 2; x < worldSize / 2; x++) {
-    for (let z = -worldSize / 2; z < worldSize / 2; z++) {
-        // sinとcosを使って滑らかな地形を生成
-        const height = Math.floor(Math.cos(x / 8) * 4 + Math.sin(z / 8) * 4) + 8;
-        for (let y = 0; y < height; y++) {
-            const material = y === height - 1 ? grassMaterial : (y > height - 4 ? dirtMaterial : stoneMaterial); // 草、土、石
-            const cube = new THREE.Mesh(cubeGeometry, material);
-            cube.position.set(x, y + 0.5, z);
-            // 静的ブロックは影のキャストを無効化（大量オブジェクトでのコスト削減）
-            cube.castShadow = false;
-            cube.receiveShadow = true;
-            scene.add(cube);
-            objects.push(cube);
-        }
-    }
+const chunkManager = new ChunkManager('seed1', 2);
+const loadedChunks = new Map<string, any>(); // key: "cx,cz" → THREE.Mesh
+function chunkKey(cx: number, cz: number) { return `${cx},${cz}`; }
+function buildChunkMesh(cx: number, cz: number) {
+  const gen = generateChunk(chunkManager.seed, cx, cz);
+  const m = meshChunk(gen.blocks);
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(m.positions, 3));
+  geom.setIndex(new THREE.Uint32BufferAttribute(m.indices, 1));
+  geom.computeVertexNormals();
+  const mat = new THREE.MeshLambertMaterial({ color: 0x66bb6a });
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.position.set(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE);
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  terrainMeshes.push(mesh);
+  loadedChunks.set(chunkKey(cx, cz), mesh);
+  chunkManager.onChunkGenerated({ key: { seed: chunkManager.seed, cx, cz }, blocks: gen.blocks });
 }
-
-
-// --- プレイヤーコントロールと物理演算 ---
+function unloadChunkByKey(k: string) {
+  const mesh = loadedChunks.get(k);
+  if (!mesh) return;
+  scene.remove(mesh);
+  const idx = terrainMeshes.indexOf(mesh);
+  if (idx >= 0) terrainMeshes.splice(idx, 1);
+  loadedChunks.delete(k);
+  const [sx, sz] = k.split(',').map(Number);
+  chunkManager.onChunkUnloaded(sx, sz);
+}// --- プレイヤーコントロールと物理演算 ---
 const controls = new THREE.PointerLockControls(camera, document.body);
 const blocker = document.getElementById('blocker');
 const instructions = document.getElementById('instructions');
@@ -177,7 +191,7 @@ document.addEventListener('mousedown', (event) => {
     if (!controls.isLocked) return;
 
     raycaster.setFromCamera({ x: 0, y: 0 }, camera);
-    const intersects = raycaster.intersectObjects(objects, false);
+    const intersects = raycaster.intersectObjects(terrainMeshes.concat(objects), false);
 
     if (intersects.length > 0) {
         const intersect = intersects[0];
@@ -185,7 +199,7 @@ document.addEventListener('mousedown', (event) => {
 
         if (event.button === 2) { // 右クリック: ブロックを置く
             const newCube = new THREE.Mesh(cubeGeometry, getSelectedMaterial());
-            newCube.position.copy(intersect.object.position).add(intersect.face.normal);
+            { const p = intersect.point; const n = intersect.face.normal; const snap = new THREE.Vector3( Math.floor(p.x + n.x*0.5)+0.5, Math.floor(p.y + n.y*0.5)+0.5, Math.floor(p.z + n.z*0.5)+0.5 ); newCube.position.copy(snap); }
             newCube.castShadow = true;
             newCube.receiveShadow = true;
             scene.add(newCube);
@@ -240,7 +254,7 @@ function animate() {
         // 衝突判定
         const playerPos = controls.getObject().position;
         raycaster.set(playerPos, new THREE.Vector3(0, -1, 0));
-        const groundIntersections = raycaster.intersectObjects(objects, false);
+        const groundIntersections = raycaster.intersectObjects(terrainMeshes.concat(objects), false);
 
         if (groundIntersections.length > 0 && groundIntersections[0].distance < 1.75) {
             playerPos.y = groundIntersections[0].point.y + 1.75;
@@ -255,17 +269,21 @@ function animate() {
         
         // ブロック設置/破壊用のヘルパー表示
         raycaster.setFromCamera({ x: 0, y: 0 }, camera);
-        const intersects = raycaster.intersectObjects(objects, false);
+        const intersects = raycaster.intersectObjects(terrainMeshes.concat(objects), false);
         if (intersects.length > 0 && intersects[0].distance < 8) {
             const intersect = intersects[0];
-            rollOverMesh.position.copy(intersect.object.position).add(intersect.face.normal);
+            { const p = intersect.point; const n = intersect.face.normal; const snap = new THREE.Vector3( Math.floor(p.x + n.x*0.5)+0.5, Math.floor(p.y + n.y*0.5)+0.5, Math.floor(p.z + n.z*0.5)+0.5 ); rollOverMesh.position.copy(snap); }
             rollOverMesh.visible = true;
         } else {
             rollOverMesh.visible = false;
         }
     }
 
-    renderer.render(scene, camera);
+        // チャンクストリーミング（プレイヤー位置に追従）
+    const upd = chunkManager.updatePlayerPosition(controls.getObject().position.x, controls.getObject().position.z);
+    for (const k of upd.unload) unloadChunkByKey(k);
+    let processed = 0; let req;
+    while (processed < 1 && (req = chunkManager.nextRequest())) { buildChunkMesh(req.cx, req.cz); processed++; }renderer.render(scene, camera);
 
     // HUD 更新
     const fpsEl = document.getElementById('fps');
