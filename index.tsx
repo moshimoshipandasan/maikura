@@ -39,18 +39,88 @@ const objects = [];
 const worldSize = 64;
 const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
 // マテリアルは再利用してメモリとパフォーマンスを最適化
-const grassMaterial = new THREE.MeshLambertMaterial({ color: 0x4caf50 });
-const dirtMaterial = new THREE.MeshLambertMaterial({ color: 0x795548 });
-const stoneMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
-const sandMaterial  = new THREE.MeshLambertMaterial({ color: 0xE4D096 });
-const woodMaterial  = new THREE.MeshLambertMaterial({ color: 0x8D6E63 });
+// ---- テクスチャ生成（外部アセットが無い環境でも動く簡易版）----
+function makeCanvas(w:number, h:number) {
+    const c = document.createElement('canvas'); c.width=w; c.height=h; return c;
+}
+function rand(n:number){ return Math.floor(Math.random()*n); }
+function lerp(a:number,b:number,t:number){ return a+(b-a)*t; }
+function rgb(r:number,g:number,b:number){ return `rgb(${r|0},${g|0},${b|0})`; }
+function noiseTex(c1:[number,number,number], c2:[number,number,number], w=32, h=32, bias=0.5) {
+    const c = makeCanvas(w,h); const ctx = c.getContext('2d')!; const img = ctx.createImageData(w,h);
+    for(let y=0;y<h;y++){
+        for(let x=0;x<w;x++){
+            const t = Math.min(1, Math.max(0, (Math.random()*0.8 + bias)));
+            const r = lerp(c1[0], c2[0], t);
+            const g = lerp(c1[1], c2[1], t);
+            const b = lerp(c1[2], c2[2], t);
+            const i = (y*w + x)*4; img.data[i]=r; img.data[i+1]=g; img.data[i+2]=b; img.data[i+3]=255;
+        }
+    }
+    ctx.putImageData(img,0,0);
+    const tex = new THREE.CanvasTexture(c);
+    tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestMipMapNearestFilter;
+    return tex;
+}
+function grassTopTex(){ return noiseTex([40,140,40],[90,200,90], 32,32, 0.35); }
+function dirtTex(){ return noiseTex([80,52,40],[120,85,60], 32,32, 0.55); }
+function stoneTex(){ return noiseTex([110,110,110],[160,160,160], 32,32, 0.5); }
+function sandTex(){ return noiseTex([212,198,150],[236,224,180], 32,32, 0.55); }
+function woodSideTex(){
+    const c = makeCanvas(32,32); const ctx = c.getContext('2d')!;
+    ctx.fillStyle = rgb(140,110,90); ctx.fillRect(0,0,32,32);
+    ctx.fillStyle = rgb(110,85,70);
+    for(let x=0;x<32;x+=4){ ctx.fillRect(x,0,2,32); }
+    const tex = new THREE.CanvasTexture(c);
+    tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestMipMapNearestFilter; return tex;
+}
+function woodTopTex(){
+    const c = makeCanvas(32,32); const ctx = c.getContext('2d')!;
+    ctx.fillStyle = rgb(160,125,95); ctx.fillRect(0,0,32,32);
+    ctx.strokeStyle = rgb(120,95,75); ctx.lineWidth = 1;
+    for(let r=2;r<16;r+=3){ ctx.beginPath(); ctx.arc(16,16,r,0,Math.PI*2); ctx.stroke(); }
+    const tex = new THREE.CanvasTexture(c);
+    tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestMipMapNearestFilter; return tex;
+}
 
+// テクスチャ付きマテリアル（Lambert）
+const matGrassTop  = new THREE.MeshLambertMaterial({ map: grassTopTex() });
+const matGrassSide = new THREE.MeshLambertMaterial({ map: (function(){
+    // 側面は緑→土の縦グラデーション風
+    const c = makeCanvas(32,32); const ctx = c.getContext('2d')!;
+    const g = ctx.createLinearGradient(0,0,0,32);
+    g.addColorStop(0, rgb(90,200,90));
+    g.addColorStop(0.5, rgb(80,150,80));
+    g.addColorStop(0.55, rgb(120,85,60));
+    g.addColorStop(1, rgb(100,70,50));
+    ctx.fillStyle = g; ctx.fillRect(0,0,32,32);
+    const tex = new THREE.CanvasTexture(c);
+    tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestMipMapNearestFilter; return tex;
+})() });
+const matDirt  = new THREE.MeshLambertMaterial({ map: dirtTex() });
+const matStone = new THREE.MeshLambertMaterial({ map: stoneTex() });
+const matSand  = new THREE.MeshLambertMaterial({ map: sandTex() });
+const matWoodSide = new THREE.MeshLambertMaterial({ map: woodSideTex() });
+const matWoodTop  = new THREE.MeshLambertMaterial({ map: woodTopTex() });
+
+// ブロック種別（グラスは面ごとに異素材、他は単一）
+const grassMaterials = [
+    matGrassSide, // +X 右
+    matGrassSide, // -X 左
+    matGrassTop,  // +Y 上
+    matDirt,      // -Y 下（土）
+    matGrassSide, // +Z 前
+    matGrassSide, // -Z 後
+];
+const woodMaterials = [
+    matWoodSide, matWoodSide, matWoodTop, matWoodTop, matWoodSide, matWoodSide
+];
 const materials = [
-  { key: 'grass', label: 'Grass', mat: grassMaterial },
-  { key: 'dirt',  label: 'Dirt',  mat: dirtMaterial  },
-  { key: 'stone', label: 'Stone', mat: stoneMaterial },
-  { key: 'sand',  label: 'Sand',  mat: sandMaterial  },
-  { key: 'wood',  label: 'Wood',  mat: woodMaterial  },
+  { key: 'grass', label: 'Grass', mat: grassMaterials },
+  { key: 'dirt',  label: 'Dirt',  mat: matDirt       },
+  { key: 'stone', label: 'Stone', mat: matStone      },
+  { key: 'sand',  label: 'Sand',  mat: matSand       },
+  { key: 'wood',  label: 'Wood',  mat: woodMaterials },
 ];
 let selectedIndex = 2; // Stone
 function getSelectedMaterial() { return materials[selectedIndex].mat; }
