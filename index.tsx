@@ -17,7 +17,7 @@ camera.position.set(0, 20, 0);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 document.body.appendChild(renderer.domElement);
 
@@ -33,21 +33,23 @@ scene.add(directionalLight);
 
 // --- ワールド生成 ---
 const objects = [];
-const worldSize = 48;
+const worldSize = 32; // パフォーマンス安定のため初期サイズを抑える
 const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
-const stoneMaterial = new THREE.MeshLambertMaterial({ color: 0xcccccc });
+// マテリアルは再利用してメモリとパフォーマンスを最適化
+const grassMaterial = new THREE.MeshLambertMaterial({ color: 0x4caf50 });
+const dirtMaterial = new THREE.MeshLambertMaterial({ color: 0x795548 });
+const stoneMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
 
 for (let x = -worldSize / 2; x < worldSize / 2; x++) {
     for (let z = -worldSize / 2; z < worldSize / 2; z++) {
         // sinとcosを使って滑らかな地形を生成
         const height = Math.floor(Math.cos(x / 8) * 4 + Math.sin(z / 8) * 4) + 8;
         for (let y = 0; y < height; y++) {
-            const material = new THREE.MeshLambertMaterial({
-                color: y === height - 1 ? 0x4caf50 : (y > height - 4 ? 0x795548 : 0x808080) // 草、土、石
-            });
+            const material = y === height - 1 ? grassMaterial : (y > height - 4 ? dirtMaterial : stoneMaterial); // 草、土、石
             const cube = new THREE.Mesh(cubeGeometry, material);
             cube.position.set(x, y + 0.5, z);
-            cube.castShadow = true;
+            // 静的ブロックは影のキャストを無効化（大量オブジェクトでのコスト削減）
+            cube.castShadow = false;
             cube.receiveShadow = true;
             scene.add(cube);
             objects.push(cube);
@@ -62,14 +64,18 @@ const blocker = document.getElementById('blocker');
 const instructions = document.getElementById('instructions');
 const crosshair = document.getElementById('crosshair');
 
-instructions.addEventListener('click', () => { controls.lock(); }, false);
+instructions?.addEventListener('click', () => { controls.lock(); }, false);
 controls.addEventListener('lock', () => {
-    blocker.style.display = 'none';
-    crosshair.style.display = 'block';
+    if (blocker && crosshair) {
+        blocker.style.display = 'none';
+        crosshair.style.display = 'block';
+    }
 });
 controls.addEventListener('unlock', () => {
-    blocker.style.display = 'flex';
-    crosshair.style.display = 'none';
+    if (blocker && crosshair) {
+        blocker.style.display = 'flex';
+        crosshair.style.display = 'none';
+    }
 });
 
 scene.add(controls.getObject());

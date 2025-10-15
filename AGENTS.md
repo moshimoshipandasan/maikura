@@ -1,25 +1,39 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-This Vite project keeps runtime logic in `index.tsx`, markup in `index.html`, styles in `index.css`, and tooling config (`vite.config.ts`, `tsconfig.json`, `metadata.json`) at the root. Expand features by adding `src/<feature>/` modules imported from `index.tsx` to keep bootstrapping lean. Place textures, audio, or UI images under `public/`.
+- Runtime entry: `index.tsx`; markup: `index.html`; styles: `index.css`.
+- Root config: `vite.config.ts`, `tsconfig.json`, `metadata.json`, `package.json`.
+- Add features in `src/<feature>/` and import from `index.tsx` to keep bootstrapping lean.
+- Assets (textures/audio/UI) live in `public/` (served at `/`).
+- When tests are added, colocate them as `*.test.ts` beside code (e.g., `src/world/terrain.test.ts`).
 
 ## Build, Test, and Development Commands
-- `npm install` - install or refresh dependencies.
-- `npm run dev` - start the hot reloading dev server on `http://localhost:5173`.
-- `npm run build` - produce the optimized bundle in `dist/` and run the TypeScript checker.
-- `npm run preview` - serve the built output locally to mimic production hosting.
+- `npm install` — install/refresh dependencies.
+- `npm run dev` — start Vite with HMR at `http://localhost:3000`.
+- `npm run build` — produce optimized bundle in `dist/`.
+- `npm run preview` — serve `dist/` locally to mimic production hosting.
+- Type-check (optional until scripted): `npx tsc --noEmit`.
+- Tests (when adopted): `npm run test` via Vitest.
 
 ## Coding Style & Naming Conventions
-Use TypeScript with four space indentation, camelCase for variables such as `playerVelocity`, and PascalCase for exported classes. Organize gameplay systems into pure functions or small classes to separate physics, input, and rendering. Keep comments brief and focused on the intent behind math heavy blocks. Run `npm run build` before committing to surface type or bundling regressions.
+- TypeScript with four-space indentation.
+- camelCase for variables (e.g., `playerVelocity`), PascalCase for exported classes.
+- Organize gameplay into pure functions or small classes to separate physics, input, and rendering.
+- Keep comments brief, focusing on intent behind math-heavy code.
+- Run `npm run build` before committing to surface bundling/type regressions.
 
 ## Testing Guidelines
-Automated coverage is not yet configured, so document manual validation in every PR: run `npm run dev`, lock the pointer, and sprint across the terrain. When you add automated coverage, adopt Vitest with `*.test.ts` beside the code (for example, `src/world/terrain.test.ts`) and add smoke tests that confirm scene boot and controls do not throw.
+- Automated coverage not yet configured. In PRs, document manual validation: run `npm run dev`, acquire Pointer Lock, sprint across terrain, and record issues/FPS.
+- When Vitest is adopted, place smoke tests next to code and ensure scene boot and controls do not throw. Name files `*.test.ts` and keep them fast.
 
 ## Commit & Pull Request Guidelines
-Follow the existing Conventional Commits pattern (`feat:`, `fix:`, `chore:`). Keep commits scoped to a single gameplay or tooling change and update docs or config in the same diff when necessary. PR descriptions should include a short summary, validation steps (commands run, browsers checked), and visuals when the user interface changes. Link issues or TODOs so future contributors can trace decisions.
+- Conventional Commits (`feat:`, `fix:`, `chore:`). Scope commits to a single gameplay/tooling change; update docs/config in the same diff as needed.
+- PRs include: short summary, validation steps (commands run, browsers checked), and screenshots/video when UI changes. Link issues/TODOs for traceability.
 
 ## Security & Configuration Tips
-Three.js is loaded from a CDN in `index.html`, so upgrade versions deliberately and prefer pinned URLs. Pointer Lock APIs require secure contexts, so test with `npm run preview` behind HTTPS before deploying. Store any future secrets outside of `metadata.json` and expose them via Vite's `import.meta.env` to avoid accidental leakage.
+- Three.js is loaded from a CDN; pin versions (currently `0.128.0`) and upgrade deliberately.
+- Pointer Lock requires secure contexts; verify with `npm run preview` over HTTPS before deploying.
+- Store secrets outside `metadata.json`; expose via `import.meta.env`.
 
-## Agent Communication
-Keep your internal reasoning in English to align with code comments and upstream docs, but deliver outward explanations, commit narratives, and review feedback in Japanese so the broader team can act quickly. 内部思考は英語で統一しつつ、コミットメッセージやPR説明などの対外的な説明は日本語でまとめてください。
+## Agent-Specific Instructions
+- Keep internal reasoning in English. Provide outward explanations—commit messages, PR descriptions, review feedback—in Japanese for the team.
