@@ -18,8 +18,8 @@
 - [x] 2.3 ChunkManager を実装（`src/world/chunkManager.ts`）
   - 可視範囲管理/生成要求/破棄（Chebyshev 半径）。外側はアンロード
   - design.md 処理フロー(2)(3) に対応（純状態 + キュー）
-- [ ] 2.4 エラーハンドリングを実装
-  - Worker タイムアウト/復帰、IndexedDB 不可時の警告（HUD 経由）
+- [x] 2.4 エラーハンドリングを実装
+  - `withTimeout` でタイムアウト例外と警告を発火、`BrowserIdbStore` は IDB 不可時に警告しメモリへフォールバック
 
 ## セクション3：インターフェース実装
 - [ ] 3.1 Renderer を実装（`src/world/renderer.ts`）

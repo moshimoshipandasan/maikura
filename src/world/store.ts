@@ -1,4 +1,5 @@
 import type { ChunkKey, BlockId } from './types';
+import { getErrorReporter } from './errors';
 
 export type BlockDelta = { offset: number; id: BlockId };
 
@@ -33,16 +34,25 @@ export class BrowserIdbStore implements DeltaStore {
   private memory = new MemoryStore();
   private readonly hasIdb = typeof indexedDB !== 'undefined';
   async loadDelta(key: string): Promise<BlockDelta[] | null> {
-    if (!this.hasIdb) return this.memory.loadDelta(key);
+    if (!this.hasIdb) {
+      getErrorReporter().warn('IndexedDB is unavailable, using in-memory store.');
+      return this.memory.loadDelta(key);
+    }
     // Placeholder: implement real IDB later
     return this.memory.loadDelta(key);
   }
   async saveDelta(key: string, deltas: BlockDelta[]): Promise<void> {
-    if (!this.hasIdb) return this.memory.saveDelta(key, deltas);
+    if (!this.hasIdb) {
+      getErrorReporter().warn('IndexedDB is unavailable, using in-memory store.');
+      return this.memory.saveDelta(key, deltas);
+    }
     return this.memory.saveDelta(key, deltas);
   }
   async clearWorld(seed: string): Promise<void> {
-    if (!this.hasIdb) return this.memory.clearWorld(seed);
+    if (!this.hasIdb) {
+      getErrorReporter().warn('IndexedDB is unavailable, using in-memory store.');
+      return this.memory.clearWorld(seed);
+    }
     return this.memory.clearWorld(seed);
   }
 }
