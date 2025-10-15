@@ -1,10 +1,10 @@
 # 実装タスクリスト
 
 ## セクション1：データモデル実装
-- [ ] 1.1 型定義を実装する（`src/world/types.ts`）
+- [x] 1.1 型定義を実装する（`src/world/types.ts`）
   - `ChunkKey`, `ChunkData(Uint8Array)`, `BlockId(enum)`, `Settings`
   - インデックス変換ヘルパー（(x,y,z)⇔offset）と境界バリデーション
-- [ ] 1.2 データ永続化層を実装する（`src/world/store.ts`）
+- [x] 1.2 データ永続化層を実装する（`src/world/store.ts`）
   - IndexedDB（idb-keyval 相当）ラッパ。キー: `world:{seed}:{cx}:{cz}`
   - CRUD: `loadDelta/saveDelta/clearWorld`、メモリフォールバック
 
