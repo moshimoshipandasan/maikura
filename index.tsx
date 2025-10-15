@@ -21,16 +21,24 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
+// 色空間・トーンマッピング設定（発色とダイナミックレンジの改善）
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
 document.body.appendChild(renderer.domElement);
 
 // --- ライティング ---
-scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+// ベースは環境＋半球＋平行光の3点構成
+scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+const hemi = new THREE.HemisphereLight(0xb1e1ff, 0x444422, 0.45); // 空色/地面反射
+scene.add(hemi);
 
-const directionalLight = new THREE.DirectionalLight(0xffffff, 0.7);
+const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
 directionalLight.position.set(50, 50, 50);
 directionalLight.castShadow = true;
 directionalLight.shadow.mapSize.width = 2048;
 directionalLight.shadow.mapSize.height = 2048;
+directionalLight.shadow.bias = -0.0005; // シャドウアクネ軽減
 scene.add(directionalLight);
 
 // --- ワールド生成 ---
@@ -46,11 +54,13 @@ function makeCanvas(w:number, h:number) {
 function rand(n:number){ return Math.floor(Math.random()*n); }
 function lerp(a:number,b:number,t:number){ return a+(b-a)*t; }
 function rgb(r:number,g:number,b:number){ return `rgb(${r|0},${g|0},${b|0})`; }
-function noiseTex(c1:[number,number,number], c2:[number,number,number], w=32, h=32, bias=0.5) {
+function noiseTex(c1:[number,number,number], c2:[number,number,number], w=32, h=32, bias=0.5, contrast=1.1, gamma=1.0) {
     const c = makeCanvas(w,h); const ctx = c.getContext('2d')!; const img = ctx.createImageData(w,h);
     for(let y=0;y<h;y++){
         for(let x=0;x<w;x++){
-            const t = Math.min(1, Math.max(0, (Math.random()*0.8 + bias)));
+            let t = Math.min(1, Math.max(0, (Math.random()*0.8 + bias)));
+            // コントラストとガンマ（見た目のノリを調整）
+            t = Math.pow((t-0.5)*contrast + 0.5, gamma);
             const r = lerp(c1[0], c2[0], t);
             const g = lerp(c1[1], c2[1], t);
             const b = lerp(c1[2], c2[2], t);
@@ -60,12 +70,13 @@ function noiseTex(c1:[number,number,number], c2:[number,number,number], w=32, h=
     ctx.putImageData(img,0,0);
     const tex = new THREE.CanvasTexture(c);
     tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestMipMapNearestFilter;
+    tex.encoding = THREE.sRGBEncoding;
     return tex;
 }
-function grassTopTex(){ return noiseTex([40,140,40],[90,200,90], 32,32, 0.35); }
-function dirtTex(){ return noiseTex([80,52,40],[120,85,60], 32,32, 0.55); }
-function stoneTex(){ return noiseTex([110,110,110],[160,160,160], 32,32, 0.5); }
-function sandTex(){ return noiseTex([212,198,150],[236,224,180], 32,32, 0.55); }
+function grassTopTex(){ return noiseTex([40,140,40],[90,200,90], 32,32, 0.33, 1.15, 1.0); }
+function dirtTex(){ return noiseTex([78,50,38],[125,90,65], 32,32, 0.55, 1.12, 1.0); }
+function stoneTex(){ return noiseTex([120,120,120],[175,175,175], 32,32, 0.50, 1.18, 1.0); }
+function sandTex(){ return noiseTex([212,198,150],[238,226,184], 32,32, 0.58, 1.08, 1.0); }
 function woodSideTex(){
     const c = makeCanvas(32,32); const ctx = c.getContext('2d')!;
     ctx.fillStyle = rgb(140,110,90); ctx.fillRect(0,0,32,32);
@@ -95,7 +106,7 @@ const matGrassSide = new THREE.MeshLambertMaterial({ map: (function(){
     g.addColorStop(1, rgb(100,70,50));
     ctx.fillStyle = g; ctx.fillRect(0,0,32,32);
     const tex = new THREE.CanvasTexture(c);
-    tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestMipMapNearestFilter; return tex;
+    tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestMipMapNearestFilter; tex.encoding = THREE.sRGBEncoding; return tex;
 })() });
 const matDirt  = new THREE.MeshLambertMaterial({ map: dirtTex() });
 const matStone = new THREE.MeshLambertMaterial({ map: stoneTex() });
