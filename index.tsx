@@ -6,6 +6,7 @@
 // THREEとPointerLockControlsはCDNからロードされるため、
 // 型エラーを避けるためにTypeScriptにグローバル変数として宣言します。
 declare const THREE: any;
+import { formatFps, formatCoords } from './src/world/hud.ts';
 
 // --- シーン、カメラ、レンダラーのセットアップ ---
 const scene = new THREE.Scene();
@@ -155,6 +156,7 @@ const clock = new THREE.Clock();
 function animate() {
     requestAnimationFrame(animate);
     const delta = Math.min(clock.getDelta(), 0.1);
+    const fps = 1 / Math.max(delta, 1e-6);
 
     if (controls.isLocked) {
         // 摩擦と重力で速度を減衰
@@ -204,6 +206,15 @@ function animate() {
     }
 
     renderer.render(scene, camera);
+
+    // HUD 更新
+    const fpsEl = document.getElementById('fps');
+    const coordsEl = document.getElementById('coords');
+    if (fpsEl && coordsEl) {
+        const p = controls.getObject().position;
+        fpsEl.textContent = formatFps(fps);
+        coordsEl.textContent = formatCoords(p.x, p.y, p.z);
+    }
 }
 
 animate();
