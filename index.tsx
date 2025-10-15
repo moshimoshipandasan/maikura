@@ -177,7 +177,9 @@ scene.add(rollOverMesh);
 // 物理・接地判定用レイ（編集とは別に持つ）
 const groundRay = new THREE.Raycaster();
 const sideRay = new THREE.Raycaster();
+const upRay = new THREE.Raycaster();
 const DOWN = new THREE.Vector3(0, -1, 0);
+const UP = new THREE.Vector3(0, 1, 0);
 
 document.addEventListener('mousedown', (event) => {
     if (!controls.isLocked) return;
@@ -243,7 +245,10 @@ function animate() {
         const playerPos = playerObj.position;
         const playerHeight = 1.75;   // 目線高（カメラ基準）
         const playerRadius = 0.35;   // カプセル半径相当（壁との最小距離）
-        const stepHeight = 0.6;      // 1ブロック弱の段差を乗り越え可能
+        const smallStep = 0.2;       // 微小段差（そのまま踏破）
+        const maxAutoJump = 1.2;     // オートジャンプで越えられる最大段差（~1ブロック）
+        const jumpImpulse = 10;      // Space と同じジャンプ力
+        const autoJumpEnabled = true;
 
         // 提案水平移動量
         let dx = -playerVelocity.x * delta;
@@ -252,6 +257,7 @@ function animate() {
         // 横壁ヒット時にスライド/停止させる（足元高さでチェック）
         const footY = playerPos.y - (playerHeight - 0.1);
         const moveLen = Math.hypot(dx, dz);
+        let blocked = false;
         if (moveLen > 1e-6) {
             const dir = new THREE.Vector3(dx / moveLen, 0, dz / moveLen);
             sideRay.set(new THREE.Vector3(playerPos.x, footY, playerPos.z), dir);
@@ -263,6 +269,7 @@ function animate() {
                 const allow = Math.max(0, h.distance - playerRadius);
                 dx = dir.x * allow;
                 dz = dir.z * allow;
+                blocked = allow + 1e-4 < moveLen; // 進行方向が抑制された
             }
         }
 
@@ -283,11 +290,26 @@ function animate() {
         })();
         if (aheadGround > -Infinity && currentGround > -Infinity) {
             const diff = aheadGround - currentGround;
-            if (diff > 0 && diff <= stepHeight && playerVelocity.y <= 0.01) {
-                // 段差に自然に乗る
+            if (diff > 0 && diff <= smallStep && playerVelocity.y <= 0.01) {
+                // ごく小さい段差は滑らかに乗り越え
                 playerPos.y = aheadGround + playerHeight;
                 playerVelocity.y = 0;
                 canJump = true;
+            } else if (
+                autoJumpEnabled && blocked && canJump && playerVelocity.y <= 0.01 &&
+                diff > smallStep && diff <= maxAutoJump
+            ) {
+                // 1ブロック程度の段差は自動ジャンプで越える
+                // 事前に頭上クリアランスを確認
+                const headOrigin = new THREE.Vector3(probeX, currentGround + playerHeight * 0.5, probeZ);
+                upRay.set(headOrigin, UP);
+                upRay.near = 0; upRay.far = playerHeight;
+                const headHits = upRay.intersectObjects(objects, false);
+                const hasClearance = headHits.length === 0 || headHits[0].distance > playerHeight * 0.8;
+                if (hasClearance) {
+                    playerVelocity.y = Math.max(playerVelocity.y, jumpImpulse);
+                    canJump = false;
+                }
             }
         }
 
