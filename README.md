@@ -42,3 +42,6 @@ npx playwright test
 ```
 - `e2e/smoke.spec.ts`: ロック/HUD更新/設置・破壊/リサイズ/コンソール無エラー
 - `e2e/editstress.spec.ts`: 設置・破壊100回の位置誤差 ≤ 0.01 を検証
+
+## Screenshots
+![Hotbar and placement preview](docs/screenshots/hotbar.png)
