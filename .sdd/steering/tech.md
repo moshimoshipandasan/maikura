@@ -10,8 +10,11 @@
 - Three.js: r128（CDN, `index.html` で読み込み）
 
 ### 依存関係（主要）
-- 開発: `typescript`, `vite`, `@types/node`
+- 開発: `typescript`, `vite`, `@types/node`, `vitest`
 - 実行時: なし（Three.js は CDN 依存）
+
+### テスト
+- フレームワーク: Vitest ^1.6（ユニット: `src/world/*.test.ts`）
 
 ## 開発環境
 ### 必要なツール
@@ -22,7 +25,12 @@
 - ビルド: `npm run build`（出力 `dist/`）
 - プレビュー: `npm run preview`
 - 型チェック: `npx tsc --noEmit`
+ - テスト: `npm run test` / 監視: `npm run test:watch`
 
 ## 環境変数
-- `GEMINI_API_KEY`: Vite 定義経由で参照。`.env.local` 等に設定（値はリポジトリに含めない）。
+- `GEMINI_API_KEY`: Vite の `define` で `process.env.API_KEY` / `process.env.GEMINI_API_KEY` にマップ。`.env.local` 等に設定（値はコミットしない）。
+
+## ビルド/開発設定の補足
+- サーバー: `host: 0.0.0.0`, `port: 3000`
+- モジュール解決: エイリアス `@ -> プロジェクトルート`
 

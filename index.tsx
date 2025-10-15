@@ -6,6 +6,8 @@
 // THREEとPointerLockControlsはCDNからロードされるため、
 // 型エラーを避けるためにTypeScriptにグローバル変数として宣言します。
 declare const THREE: any;
+import { formatFps, formatCoords } from './src/world/hud.ts';
+import { FpsLogger, AutoPlayer, installValidationHotkeys, registerValidationContext, runEditStressTest } from './src/world/validation.ts';
 
 // --- シーン、カメラ、レンダラーのセットアップ ---
 const scene = new THREE.Scene();
@@ -39,6 +41,18 @@ const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
 const grassMaterial = new THREE.MeshLambertMaterial({ color: 0x4caf50 });
 const dirtMaterial = new THREE.MeshLambertMaterial({ color: 0x795548 });
 const stoneMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
+const sandMaterial  = new THREE.MeshLambertMaterial({ color: 0xE4D096 });
+const woodMaterial  = new THREE.MeshLambertMaterial({ color: 0x8D6E63 });
+
+const materials = [
+  { key: 'grass', label: 'Grass', mat: grassMaterial },
+  { key: 'dirt',  label: 'Dirt',  mat: dirtMaterial  },
+  { key: 'stone', label: 'Stone', mat: stoneMaterial },
+  { key: 'sand',  label: 'Sand',  mat: sandMaterial  },
+  { key: 'wood',  label: 'Wood',  mat: woodMaterial  },
+];
+let selectedIndex = 2; // Stone
+function getSelectedMaterial() { return materials[selectedIndex].mat; }
 
 for (let x = -worldSize / 2; x < worldSize / 2; x++) {
     for (let z = -worldSize / 2; z < worldSize / 2; z++) {
@@ -63,12 +77,28 @@ const controls = new THREE.PointerLockControls(camera, document.body);
 const blocker = document.getElementById('blocker');
 const instructions = document.getElementById('instructions');
 const crosshair = document.getElementById('crosshair');
+// 検証用表示領域（HUD下部に追加）
+const hud = document.getElementById('hud');
+const validationEl = document.createElement('div');
+validationEl.id = 'validation';
+validationEl.style.marginTop = '6px';
+validationEl.style.opacity = '0.85';
+validationEl.textContent = 'Validation: (T=both / Y=auto / U=fps)';
+hud?.appendChild(validationEl);
 
 instructions?.addEventListener('click', () => { controls.lock(); }, false);
 controls.addEventListener('lock', () => {
     if (blocker && crosshair) {
         blocker.style.display = 'none';
         crosshair.style.display = 'block';
+    }
+    // URL パラメータでの自動テスト起動
+    const params = new URLSearchParams(location.search);
+    const auto = params.get('autotest');
+    const secs = Number(params.get('secs') ?? '30');
+    if (auto === '1' || auto === 'true') {
+        if (!fpsLogger || !fpsLogger.isRunning()) { startFps(secs); }
+        if (!autoPlayer.isRunning()) { autoPlayer.start(); }
     }
 });
 controls.addEventListener('unlock', () => {
@@ -78,12 +108,33 @@ controls.addEventListener('unlock', () => {
     }
 });
 
+// --- バリデーション支援（FPSロガー & オートプレイ）---
+let fpsLogger: FpsLogger | null = null;
+const autoPlayer = new AutoPlayer();
+
+function startFps(seconds: number) {
+    const el = validationEl;
+    fpsLogger = new FpsLogger(seconds, (stats) => {
+        el.textContent = `Validation: done | avg=${stats.avg.toFixed(1)} min=${stats.min.toFixed(1)} samples=${stats.samples}`;
+    });
+    fpsLogger.start();
+    validationEl.textContent = `Validation: running ${seconds}s...`;
+}
+
+installValidationHotkeys({
+    onToggleAuto: () => {
+        if (autoPlayer.isRunning()) { autoPlayer.stop(); validationEl.textContent = 'Validation: auto=OFF'; }
+        else { autoPlayer.start(); validationEl.textContent = 'Validation: auto=ON'; }
+    },
+    onStartFpsLog: (secs) => startFps(secs),
+});
+
 scene.add(controls.getObject());
 
-const moveState = { forward: false, backward: false, left: false, right: false };
+const moveState = { forward: false, backward: false, left: false, right: false, sprint: false };
 const playerVelocity = new THREE.Vector3();
 const playerDirection = new THREE.Vector3();
-const playerSpeed = 10.0;
+const baseSpeed = 10.0;
 const gravity = 30.0;
 let canJump = false;
 
@@ -93,7 +144,13 @@ document.addEventListener('keydown', (event) => {
         case 'KeyA': moveState.left = true; break;
         case 'KeyS': moveState.backward = true; break;
         case 'KeyD': moveState.right = true; break;
-        case 'Space': if (canJump) playerVelocity.y += 10; canJump = false; break;
+        case 'ShiftLeft': moveState.sprint = true; break;
+        case 'Digit1': selectHotbar(0); break;
+        case 'Digit2': selectHotbar(1); break;
+        case 'Digit3': selectHotbar(2); break;
+        case 'Digit4': selectHotbar(3); break;
+        case 'Digit5': selectHotbar(4); break;
+        case 'Space': if (canJump) { playerVelocity.y += 10; canJump = false; } break;
     }
 });
 
@@ -103,6 +160,7 @@ document.addEventListener('keyup', (event) => {
         case 'KeyA': moveState.left = false; break;
         case 'KeyS': moveState.backward = false; break;
         case 'KeyD': moveState.right = false; break;
+        case 'ShiftLeft': moveState.sprint = false; break;
     }
 });
 
@@ -126,14 +184,16 @@ document.addEventListener('mousedown', (event) => {
         if (intersect.distance > 8) return; // 届く範囲を制限
 
         if (event.button === 2) { // 右クリック: ブロックを置く
-            const newCube = new THREE.Mesh(cubeGeometry, stoneMaterial);
+            const newCube = new THREE.Mesh(cubeGeometry, getSelectedMaterial());
             newCube.position.copy(intersect.object.position).add(intersect.face.normal);
             newCube.castShadow = true;
             newCube.receiveShadow = true;
             scene.add(newCube);
             objects.push(newCube);
+            persistEdit(newCube.position, materials[selectedIndex].key);
         } else if (event.button === 0) { // 左クリック: ブロックを壊す
             if (intersect.object !== scene) {
+                persistEdit(intersect.object.position, null);
                 scene.remove(intersect.object);
                 objects.splice(objects.indexOf(intersect.object), 1);
             }
@@ -155,6 +215,7 @@ const clock = new THREE.Clock();
 function animate() {
     requestAnimationFrame(animate);
     const delta = Math.min(clock.getDelta(), 0.1);
+    const fps = 1 / Math.max(delta, 1e-6);
 
     if (controls.isLocked) {
         // 摩擦と重力で速度を減衰
@@ -167,8 +228,9 @@ function animate() {
         playerDirection.x = Number(moveState.right) - Number(moveState.left);
         playerDirection.normalize(); // 斜め移動でも速度が同じになるように正規化
 
-        if (moveState.forward || moveState.backward) playerVelocity.z -= playerDirection.z * playerSpeed * delta * 10;
-        if (moveState.left || moveState.right) playerVelocity.x -= playerDirection.x * playerSpeed * delta * 10;
+        const speed = baseSpeed * (moveState.sprint ? 1.8 : 1.0);
+        if (moveState.forward || moveState.backward) playerVelocity.z -= playerDirection.z * speed * delta * 10;
+        if (moveState.left || moveState.right) playerVelocity.x -= playerDirection.x * speed * delta * 10;
 
         // 移動を適用
         controls.moveRight(-playerVelocity.x * delta);
@@ -204,6 +266,116 @@ function animate() {
     }
 
     renderer.render(scene, camera);
+
+    // HUD 更新
+    const fpsEl = document.getElementById('fps');
+    const coordsEl = document.getElementById('coords');
+    if (fpsEl && coordsEl) {
+        const p = controls.getObject().position;
+        fpsEl.textContent = formatFps(fps);
+        coordsEl.textContent = formatCoords(p.x, p.y, p.z);
+    }
+    // 検証ログ
+    if (fpsLogger && fpsLogger.isRunning()) {
+        fpsLogger.tick(fps);
+    }
 }
 
 animate();
+
+// ---- Validation wiring ----
+registerValidationContext({
+    scene,
+    camera,
+    raycaster,
+    objects,
+    cubeGeometry,
+    placeMaterial: stoneMaterial,
+    getPlayerPosition: () => ({ ...controls.getObject().position })
+});
+
+function runAndReportEditStress(cycles:number) {
+    const res = runEditStressTest(cycles);
+    if (res) {
+        const within = Math.abs(res.dx) <= 0.01 && Math.abs(res.dy) <= 0.01 && Math.abs(res.dz) <= 0.01;
+        validationEl.textContent = `EditStress: done d=(${res.dx.toFixed(3)}, ${res.dy.toFixed(3)}, ${res.dz.toFixed(3)}) pass=${within}`;
+        // eslint-disable-next-line no-console
+        console.log('[EditStress] done', { ...res, pass: within });
+    } else {
+        validationEl.textContent = 'EditStress: ctx unavailable';
+    }
+}
+
+installValidationHotkeys({
+    onToggleAuto: () => {
+        if (autoPlayer.isRunning()) { autoPlayer.stop(); validationEl.textContent = 'Validation: auto=OFF'; }
+        else { autoPlayer.start(); validationEl.textContent = 'Validation: auto=ON'; }
+    },
+    onStartFpsLog: (secs) => startFps(secs),
+    onEditStress: (cycles) => runAndReportEditStress(cycles),
+});
+
+// URL パラメータによる EditStress 起動（Pointer Lock 不要）
+{
+    const params = new URLSearchParams(location.search);
+    const es = params.get('editstress');
+    if (es) {
+        const n = Math.max(1, Math.min(1000, Number(es)));
+        setTimeout(() => runAndReportEditStress(n), 500);
+    }
+}
+
+// ---- ホットバーの見た目更新と選択 ----
+function reflectHotbar() {
+    const slots = Array.from(document.querySelectorAll('#hotbar .slot')) as HTMLElement[];
+    slots.forEach((el, i) => el.classList.toggle('active', i === selectedIndex));
+}
+function selectHotbar(i: number) { selectedIndex = Math.max(0, Math.min(materials.length - 1, i)); reflectHotbar(); }
+
+// ---- 簡易永続化（localStorage） ----
+type EditMap = { [posKey: string]: string | null };
+function keyFromPos(p: any) { return `${Math.round(p.x*1000)/1000},${Math.round(p.y*1000)/1000},${Math.round(p.z*1000)/1000}`; }
+const LS_KEY = 'blockworld_edits_v1';
+function loadEdits(): EditMap { try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch { return {}; } }
+function saveEdits(map: EditMap) { try { localStorage.setItem(LS_KEY, JSON.stringify(map)); } catch { /* ignore */ } }
+function persistEdit(pos: any, type: string | null) { const map = loadEdits(); map[keyFromPos(pos)] = type; saveEdits(map); }
+function applyEdits() {
+    const map = loadEdits();
+    const eps = 1e-6;
+    const findAt = (x:number,y:number,z:number) => objects.find((o:any) => Math.abs(o.position.x - x)<eps && Math.abs(o.position.y - y)<eps && Math.abs(o.position.z - z)<eps);
+    for (const [k, v] of Object.entries(map)) {
+        const [x,y,z] = k.split(',').map(Number);
+        const target = findAt(x,y,z);
+        if (v === null) {
+            if (target) { scene.remove(target); objects.splice(objects.indexOf(target),1); }
+        } else {
+            if (!target) {
+                const idx = materials.findIndex(m=>m.key===v);
+                const m = idx>=0? materials[idx].mat : stoneMaterial;
+                const cube = new THREE.Mesh(cubeGeometry, m);
+                cube.position.set(x,y,z);
+                cube.castShadow = true; cube.receiveShadow = true;
+                scene.add(cube); objects.push(cube);
+            } else {
+                const idx = materials.findIndex(m=>m.key===v);
+                const mat = idx>=0? materials[idx].mat : stoneMaterial;
+                target.material = mat;
+            }
+        }
+    }
+}
+
+// 初期ロード時に反映
+applyEdits();
+
+// ---- E2E helpers (for Playwright) ----
+// Expose minimal debug API to drive smoke interactions in tests.
+(window as any).__e2e = {
+    lock: () => controls.lock(),
+    isLocked: () => controls.isLocked,
+    getFpsText: () => document.getElementById('fps')?.textContent,
+    getCoordsText: () => document.getElementById('coords')?.textContent,
+    getObjectsCount: () => objects.length,
+    rightClick: () => document.dispatchEvent(new MouseEvent('mousedown', { button: 2 })),
+    leftClick: () => document.dispatchEvent(new MouseEvent('mousedown', { button: 0 })),
+};
