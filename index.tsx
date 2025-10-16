@@ -46,6 +46,14 @@ const objects = [];
 // ワールドを拡張（元: 32）。描画/操作の安定性と相談し 64 に調整。
 const worldSize = 64;
 const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
+const dropGeometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+type DropItem = { mesh: any; key: string; velocity: any; ttl: number };
+const dropItems: DropItem[] = [];
+const DROP_GRAVITY = 18;
+const DROP_DAMPING = 0.65;
+const DROP_BOUNCE = 0.35;
+const DROP_GROUND_Y = 0.3;
+const DROP_LIFETIME = 45;
 // マテリアルは再利用してメモリとパフォーマンスを最適化
 // ---- テクスチャ生成（外部アセットが無い環境でも動く簡易版）----
 function makeCanvas(w:number, h:number) {
@@ -157,37 +165,151 @@ const blockCatalog: BlockDef[] = [
 
 const blockMap = new Map(blockCatalog.map((entry) => [entry.key, entry]));
 
-const DEFAULT_HOTBAR: string[] = ['grass', 'dirt', 'stone', 'sand', 'wood'];
-let hotbarKeys: string[] = [...DEFAULT_HOTBAR];
-let selectedHotbarIndex = 2; // Stone
-const HOTBAR_LS_KEY = 'blockworld_hotbar_v1';
+const HOTBAR_SLOT_COUNT = 9;
+const HOTBAR_STACK_LIMIT = 64;
+const DEFAULT_HOTBAR: (string | null)[] = Array(HOTBAR_SLOT_COUNT).fill(null);
+const DEFAULT_INVENTORY: InventoryCounts = {
+    grass: HOTBAR_STACK_LIMIT,
+    dirt: HOTBAR_STACK_LIMIT,
+    stone: HOTBAR_STACK_LIMIT,
+    sand: HOTBAR_STACK_LIMIT,
+    wood: HOTBAR_STACK_LIMIT,
+    snow: HOTBAR_STACK_LIMIT,
+    mud: HOTBAR_STACK_LIMIT,
+    moss: HOTBAR_STACK_LIMIT,
+    obsidian: HOTBAR_STACK_LIMIT,
+};
+const HOTBAR_LS_KEY = 'blockworld_hotbar_v2';
+const INVENTORY_LS_KEY = 'blockworld_inventory_v1';
+
+type HotbarSlot = { key: string | null; count: number };
+type InventoryCounts = { [key: string]: number };
+
+let hotbarSlots: HotbarSlot[] = Array.from({ length: HOTBAR_SLOT_COUNT }, () => ({ key: null, count: 0 }));
+let selectedHotbarIndex = 0;
+let inventoryCounts: InventoryCounts = {};
 
 function getBlockDef(key: string): BlockDef {
     return blockMap.get(key) ?? blockMap.get('stone')!;
 }
-function getSelectedBlockKey() { return hotbarKeys[selectedHotbarIndex]; }
-function getSelectedMaterial() { return getBlockDef(getSelectedBlockKey()).mat; }
 
-function loadHotbarFromStorage() {
+function materialFor(key: string) {
+    return getBlockDef(key).mat;
+}
+
+function getSelectedHotbarSlot(): HotbarSlot {
+    return hotbarSlots[selectedHotbarIndex] ?? { key: null, count: 0 };
+}
+
+function getSelectedBlockKey(): string | null {
+    return getSelectedHotbarSlot().key;
+}
+
+function getSelectedMaterial() {
+    const key = getSelectedBlockKey();
+    return materialFor(key ?? 'stone');
+}
+
+function loadInventoryFromStorage() {
+    inventoryCounts = {};
     try {
-        const raw = JSON.parse(localStorage.getItem(HOTBAR_LS_KEY) ?? '[]');
-        if (Array.isArray(raw)) {
-            for (let i = 0; i < hotbarKeys.length; i++) {
-                const candidate = raw[i];
-                hotbarKeys[i] = (typeof candidate === 'string' && blockMap.has(candidate)) ? candidate : DEFAULT_HOTBAR[i];
+        const raw = localStorage.getItem(INVENTORY_LS_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+                    if (blockMap.has(key)) {
+                        const count = Number(value);
+                        if (Number.isFinite(count) && count > 0) {
+                            inventoryCounts[key] = Math.floor(count);
+                        }
+                    }
+                }
             }
         }
     } catch {
-        hotbarKeys = [...DEFAULT_HOTBAR];
+        inventoryCounts = {};
     }
+    if (Object.keys(inventoryCounts).length === 0) {
+        inventoryCounts = { ...DEFAULT_INVENTORY };
+    }
+}
+
+function saveInventoryToStorage() {
+    try {
+        const cleaned: InventoryCounts = {};
+        for (const [key, value] of Object.entries(inventoryCounts)) {
+            if (value > 0) cleaned[key] = value;
+        }
+        localStorage.setItem(INVENTORY_LS_KEY, JSON.stringify(cleaned));
+    } catch {
+        /* ignore */
+    }
+}
+
+function loadHotbarFromStorage() {
+    try {
+        const raw = localStorage.getItem(HOTBAR_LS_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+                for (let i = 0; i < HOTBAR_SLOT_COUNT; i++) {
+                    const entry = parsed[i];
+                    if (entry && typeof entry === 'object' && 'key' in entry) {
+                        const key = (entry as any).key;
+                        const count = Number((entry as any).count);
+                        if (typeof key === 'string' && blockMap.has(key)) {
+                            const safeCount = Number.isFinite(count) ? Math.max(0, Math.min(HOTBAR_STACK_LIMIT, Math.floor(count))) : HOTBAR_STACK_LIMIT;
+                            hotbarSlots[i] = { key, count: safeCount };
+                            continue;
+                        }
+                    }
+                    if (typeof entry === 'string' && blockMap.has(entry)) {
+                        hotbarSlots[i] = { key: entry, count: HOTBAR_STACK_LIMIT };
+                        continue;
+                    }
+                    const fallbackKey = DEFAULT_HOTBAR[i] ?? null;
+                    hotbarSlots[i] = fallbackKey ? { key: fallbackKey, count: HOTBAR_STACK_LIMIT } : { key: null, count: 0 };
+                }
+                return;
+            }
+        }
+    } catch {
+        /* ignore */
+    }
+    hotbarSlots = Array.from({ length: HOTBAR_SLOT_COUNT }, () => ({ key: null, count: 0 }));
 }
 
 function saveHotbarToStorage() {
     try {
-        localStorage.setItem(HOTBAR_LS_KEY, JSON.stringify(hotbarKeys));
+        const payload = hotbarSlots.map((slot) => slot.key ? { key: slot.key, count: slot.count } : { key: null, count: 0 });
+        localStorage.setItem(HOTBAR_LS_KEY, JSON.stringify(payload));
     } catch {
         /* ignore */
     }
+}
+
+function getInventoryCount(key: string) {
+    return inventoryCounts[key] ?? 0;
+}
+
+function increaseInventoryCount(key: string, amount: number) {
+    if (!blockMap.has(key) || amount <= 0) return;
+    inventoryCounts[key] = (inventoryCounts[key] ?? 0) + amount;
+    saveInventoryToStorage();
+    reflectInventoryCounts();
+}
+
+function decreaseInventoryCount(key: string, amount: number) {
+    if (amount <= 0) return false;
+    const current = inventoryCounts[key] ?? 0;
+    if (current < amount) return false;
+    const next = current - amount;
+    if (next > 0) inventoryCounts[key] = next;
+    else delete inventoryCounts[key];
+    saveInventoryToStorage();
+    reflectInventoryCounts();
+    return true;
 }
 
 type BiomeProfile = {
@@ -216,10 +338,7 @@ function sampleBiome(x: number, z: number): BiomeProfile {
     return { top: 'grass', subsurface: 'dirt', deep: 'stone', transitionDepth: 3, heightOffset: 0 };
 }
 
-function materialFor(key: string) {
-    return getBlockDef(key).mat;
-}
-
+loadInventoryFromStorage();
 loadHotbarFromStorage();
 
 for (let x = -worldSize / 2; x < worldSize / 2; x++) {
@@ -272,8 +391,11 @@ validationEl.style.opacity = '0.85';
 validationEl.textContent = 'Validation: (T=both / Y=auto / U=fps)';
 hud?.appendChild(validationEl);
 
+const inventoryButtons = new Map<string, HTMLButtonElement>();
+
 let inventoryOpen = false;
 let pendingInventoryKey: string | null = null;
+let pendingSourceSlot: number | null = null;
 let relockAfterInventory = false;
 
 instructions?.addEventListener('click', () => { controls.lock(); }, false);
@@ -377,7 +499,12 @@ function openInventory() {
     clearMovementState();
     playerVelocity.x = 0;
     playerVelocity.z = 0;
-    setPendingInventoryKey(getSelectedBlockKey());
+    const currentKey = getSelectedBlockKey();
+    if (currentKey && getInventoryCount(currentKey) > 0) {
+        setPendingInventoryKey(currentKey);
+    } else {
+        setPendingInventoryKey(null);
+    }
     applyInventoryVisibility();
 }
 
@@ -385,7 +512,7 @@ function closeInventory() {
     if (!inventoryOpen) return;
     inventoryOpen = false;
     applyInventoryVisibility();
-    setPendingInventoryKey(null);
+    clearPendingSelections();
     if (relockAfterInventory) {
         controls.lock();
     }
@@ -402,10 +529,20 @@ inventoryGrid?.addEventListener('click', (event) => {
     if (!target) return;
     event.preventDefault();
     const key = target.dataset.key ?? null;
-    if (!key) return;
-    if (pendingInventoryKey === key && inventoryOpen) {
-        assignHotbarSlot(selectedHotbarIndex, key);
-    } else {
+    if (!key || !blockMap.has(key)) return;
+    if (pendingSourceSlot !== null) {
+        moveSlotToInventory(pendingSourceSlot);
+        pendingSourceSlot = null;
+        reflectInventorySelection();
+        return;
+    }
+    if (getInventoryCount(key) <= 0) return;
+    if (event.shiftKey) {
+        setPendingInventoryKey(key);
+        return;
+    }
+    const assigned = assignHotbarSlot(selectedHotbarIndex, key);
+    if (!assigned) {
         setPendingInventoryKey(key);
     }
 });
@@ -416,13 +553,33 @@ hotbarEl?.addEventListener('click', (event) => {
     event.preventDefault();
     const index = Number(target.dataset.index ?? '-1');
     if (Number.isNaN(index)) return;
+    const slot = hotbarSlots[index];
     if (pendingInventoryKey) {
-        assignHotbarSlot(index, pendingInventoryKey);
-        setPendingInventoryKey(pendingInventoryKey);
+        const assigned = assignHotbarSlot(index, pendingInventoryKey);
+        if (assigned && pendingInventoryKey && getInventoryCount(pendingInventoryKey) <= 0) {
+            pendingInventoryKey = null;
+        }
+        reflectInventorySelection();
+        reflectHotbar();
+    } else if (pendingSourceSlot !== null) {
+        if (pendingSourceSlot === index) {
+            pendingSourceSlot = null;
+            reflectHotbar();
+        } else {
+            moveHotbarSlot(pendingSourceSlot, index);
+        }
+        reflectInventorySelection();
     } else if (inventoryOpen) {
-        const keyForSlot = hotbarKeys[index] ?? DEFAULT_HOTBAR[index] ?? 'stone';
-        setPendingInventoryKey(keyForSlot);
-        selectHotbar(index);
+        if (event.shiftKey) {
+            moveSlotToInventory(index);
+            reflectInventorySelection();
+        } else if (slot.key) {
+            pendingSourceSlot = index;
+            reflectInventorySelection();
+            reflectHotbar();
+        } else {
+            selectHotbar(index);
+        }
     } else {
         selectHotbar(index);
     }
@@ -459,6 +616,23 @@ document.addEventListener('keydown', (event) => {
         case 'Digit3': selectHotbar(2); break;
         case 'Digit4': selectHotbar(3); break;
         case 'Digit5': selectHotbar(4); break;
+        case 'Digit6': selectHotbar(5); break;
+        case 'Digit7': selectHotbar(6); break;
+        case 'Digit8': selectHotbar(7); break;
+        case 'Digit9': selectHotbar(8); break;
+        case 'KeyQ':
+            if (controls.isLocked) {
+                event.preventDefault();
+                const slot = getSelectedHotbarSlot();
+                if (slot.key && slot.count > 0) {
+                    if (event.shiftKey) {
+                        dropSelectedHotbarItem(slot.count);
+                    } else {
+                        dropSelectedHotbarItem(1);
+                    }
+                }
+            }
+            break;
         case 'Space': if (canJump) { playerVelocity.y += 10; canJump = false; } break;
     }
 });
@@ -473,6 +647,14 @@ document.addEventListener('keyup', (event) => {
         case 'ShiftLeft': moveState.sprint = false; break;
     }
 });
+
+document.addEventListener('wheel', (event) => {
+    if (inventoryOpen) return;
+    if (!controls.isLocked) return;
+    if (event.deltaY === 0) return;
+    event.preventDefault();
+    cycleHotbar(event.deltaY > 0 ? 1 : -1);
+}, { passive: false });
 
 
 // --- ブロック操作 ---
@@ -505,8 +687,11 @@ document.addEventListener('mousedown', (event) => {
         if (intersect.distance > 8) return; // 届く範囲を制限
 
         if (event.button === 2) { // 右クリック: ブロックを置く
-            const blockKey = getSelectedBlockKey();
-            const newCube = new THREE.Mesh(cubeGeometry, getSelectedMaterial());
+            const slot = getSelectedHotbarSlot();
+            const blockKey = slot.key;
+            if (!blockKey || slot.count <= 0) return;
+            const material = materialFor(blockKey);
+            const newCube = new THREE.Mesh(cubeGeometry, material);
             newCube.position.copy(intersect.object.position).add(intersect.face.normal);
             newCube.castShadow = true;
             newCube.receiveShadow = true;
@@ -514,11 +699,20 @@ document.addEventListener('mousedown', (event) => {
             scene.add(newCube);
             objects.push(newCube);
             persistEdit(newCube.position, blockKey);
+            consumeHotbarItem(selectedHotbarIndex, 1);
         } else if (event.button === 0) { // 左クリック: ブロックを壊す
             if (intersect.object !== scene) {
+                const dropKey = typeof intersect.object.userData?.blockKey === 'string'
+                    ? intersect.object.userData.blockKey
+                    : 'stone';
                 persistEdit(intersect.object.position, null);
                 scene.remove(intersect.object);
-                objects.splice(objects.indexOf(intersect.object), 1);
+                const idx = objects.indexOf(intersect.object);
+                if (idx >= 0) objects.splice(idx, 1);
+                if (dropKey) {
+                    const dropPos = intersect.object.position.clone().add(new THREE.Vector3(0, 0.6, 0));
+                    spawnDrop(dropPos, dropKey);
+                }
             }
         }
     }
@@ -667,11 +861,13 @@ function animate() {
             rollOverMesh.position.copy(intersect.object.position).add(intersect.face.normal);
             rollOverMesh.visible = true;
         } else {
-            rollOverMesh.visible = false;
-        }
+        rollOverMesh.visible = false;
     }
+}
 
-    renderer.render(scene, camera);
+updateDrops(delta);
+
+renderer.render(scene, camera);
 
     // HUD 更新
     const fpsEl = document.getElementById('fps');
@@ -735,6 +931,7 @@ installValidationHotkeys({
 function buildInventoryGrid() {
     if (!inventoryGrid) return;
     inventoryGrid.innerHTML = '';
+    inventoryButtons.clear();
     blockCatalog.forEach((block) => {
         const button = document.createElement('button');
         button.type = 'button';
@@ -742,27 +939,48 @@ function buildInventoryGrid() {
         button.dataset.key = block.key;
         button.setAttribute('aria-label', block.label);
         button.setAttribute('title', block.label);
+
         const icon = document.createElement('span');
         icon.className = `item-icon ${block.iconClass}`;
         icon.setAttribute('aria-hidden', 'true');
         icon.dataset.key = block.key;
-        button.appendChild(icon);
+
+        const count = document.createElement('span');
+        count.className = 'item-count';
+
+        button.append(icon, count);
+        inventoryButtons.set(block.key, button);
         inventoryGrid.appendChild(button);
+    });
+    reflectInventoryCounts();
+    reflectInventorySelection();
+}
+
+function reflectInventoryCounts() {
+    inventoryButtons.forEach((button, key) => {
+        const count = getInventoryCount(key);
+        const countEl = button.querySelector('.item-count') as HTMLElement | null;
+        if (countEl) {
+            countEl.textContent = count > 0 ? String(count) : '';
+        }
+        const isEmpty = count <= 0;
+        button.classList.toggle('empty', isEmpty);
+        button.disabled = isEmpty;
     });
 }
 
 function reflectInventorySelection() {
-    if (!inventoryGrid) return;
-    const slots = Array.from(inventoryGrid.querySelectorAll('.inventory-slot')) as HTMLElement[];
-    slots.forEach((slot) => {
-        slot.classList.toggle('selected', pendingInventoryKey === slot.dataset.key);
+    inventoryButtons.forEach((button, key) => {
+        button.classList.toggle('selected', pendingInventoryKey === key);
     });
     if (inventoryHint) {
         if (pendingInventoryKey) {
             const block = getBlockDef(pendingInventoryKey);
-            inventoryHint.textContent = `${block.label} を選択中 (ホットバーをクリック)`;
+            inventoryHint.textContent = `${block.label} を選択中 (ホットバーをクリック / Shift+クリックで戻す)`;
+        } else if (pendingSourceSlot !== null) {
+            inventoryHint.textContent = '移動先のホットバースロットを選択してください (Shift+クリックで倉庫へ戻す)';
         } else {
-            inventoryHint.textContent = 'アイテムをクリックしてホットバーへ移動 (E で閉じる)';
+            inventoryHint.textContent = 'クリックで選択中のホットバースロットへ補充 (Shift+クリックでスロット選択モード)';
         }
     }
 }
@@ -770,38 +988,259 @@ function reflectInventorySelection() {
 function reflectHotbar() {
     const slots = Array.from(document.querySelectorAll('#hotbar .slot')) as HTMLElement[];
     slots.forEach((el, i) => {
-        const key = hotbarKeys[i] ?? DEFAULT_HOTBAR[i] ?? getSelectedBlockKey();
-        const def = getBlockDef(key);
-        const icon = el.querySelector('.slot-icon') as HTMLElement | null;
-        if (icon) {
-            icon.className = `slot-icon item-icon ${def.iconClass}`;
-            icon.setAttribute('title', def.label);
-            icon.setAttribute('aria-hidden', 'true');
-            icon.dataset.key = def.key;
-        }
+        const slot = hotbarSlots[i] ?? { key: null, count: 0 };
+        const key = slot.key;
         el.dataset.index = String(i);
-        el.dataset.key = key;
-        el.setAttribute('aria-label', `スロット${i + 1}: ${def.label}`);
+        el.dataset.key = key ?? '';
+        const icon = el.querySelector('.slot-icon') as HTMLElement | null;
+        const def = key ? getBlockDef(key) : null;
+        if (icon) {
+            if (def) {
+                icon.className = `slot-icon item-icon ${def.iconClass}`;
+                icon.setAttribute('title', def.label);
+                icon.dataset.key = def.key;
+            } else {
+                icon.className = 'slot-icon';
+                icon.removeAttribute('title');
+                icon.dataset.key = '';
+            }
+            icon.setAttribute('aria-hidden', 'true');
+        }
+        let countEl = el.querySelector('.slot-count') as HTMLElement | null;
+        if (!countEl) {
+            countEl = document.createElement('span');
+            countEl.className = 'slot-count';
+            el.appendChild(countEl);
+        }
+        countEl.textContent = key && slot.count > 0 ? String(slot.count) : '';
+        const hasItem = !!key && slot.count > 0;
         el.classList.toggle('active', i === selectedHotbarIndex);
+        el.classList.toggle('empty', !hasItem);
+        el.classList.toggle('has-item', hasItem);
+        el.classList.toggle('pending', pendingSourceSlot === i);
+        el.setAttribute('aria-label', `スロット${i + 1}: ${def ? def.label : '空'}`);
     });
 }
 
+function clearPendingSelections() {
+    pendingInventoryKey = null;
+    pendingSourceSlot = null;
+    reflectInventorySelection();
+    reflectHotbar();
+}
+
 function selectHotbar(i: number) {
-    selectedHotbarIndex = Math.max(0, Math.min(hotbarKeys.length - 1, i));
+    selectedHotbarIndex = Math.max(0, Math.min(HOTBAR_SLOT_COUNT - 1, i));
+    pendingSourceSlot = null;
+    reflectHotbar();
+}
+
+function cycleHotbar(delta: number) {
+    const total = HOTBAR_SLOT_COUNT;
+    const next = (selectedHotbarIndex + delta + total) % total;
+    selectHotbar(next);
+}
+
+function moveSlotToInventory(index: number, opts: { skipReflect?: boolean } = {}) {
+    const slot = hotbarSlots[index];
+    if (!slot) return;
+    if (pendingSourceSlot === index) {
+        pendingSourceSlot = null;
+    }
+    if (slot.key && slot.count > 0) {
+        increaseInventoryCount(slot.key, slot.count);
+    }
+    hotbarSlots[index] = { key: null, count: 0 };
+    saveHotbarToStorage();
+    if (!opts.skipReflect) {
+        reflectHotbar();
+        reflectInventoryCounts();
+    }
+}
+
+function moveHotbarSlot(from: number, to: number) {
+    if (from === to) return;
+    const tmp = hotbarSlots[to];
+    hotbarSlots[to] = hotbarSlots[from];
+    hotbarSlots[from] = tmp;
+    selectedHotbarIndex = to;
+    saveHotbarToStorage();
+    pendingSourceSlot = null;
     reflectHotbar();
 }
 
 function assignHotbarSlot(index: number, key: string) {
-    if (!blockMap.has(key)) return;
-    const clamped = Math.max(0, Math.min(hotbarKeys.length - 1, index));
-    hotbarKeys[clamped] = key;
+    if (!blockMap.has(key)) return false;
+    const clamped = Math.max(0, Math.min(HOTBAR_SLOT_COUNT - 1, index));
+    const slot = hotbarSlots[clamped];
+    const available = getInventoryCount(key);
+    let assigned = false;
+    if (slot.key === key) {
+        if (available <= 0) return false;
+        const needed = HOTBAR_STACK_LIMIT - slot.count;
+        if (needed <= 0) return false;
+        const amount = Math.min(available, needed);
+        if (decreaseInventoryCount(key, amount)) {
+            slot.count += amount;
+            saveHotbarToStorage();
+            reflectHotbar();
+            reflectInventoryCounts();
+            assigned = true;
+        }
+    } else {
+        moveSlotToInventory(clamped, { skipReflect: true });
+        if (available <= 0) {
+            reflectHotbar();
+            reflectInventoryCounts();
+            return false;
+        }
+        const amount = Math.min(available, HOTBAR_STACK_LIMIT);
+        if (decreaseInventoryCount(key, amount)) {
+            hotbarSlots[clamped] = { key, count: amount };
+            saveHotbarToStorage();
+            reflectHotbar();
+            reflectInventoryCounts();
+            assigned = true;
+        }
+    }
+    if (assigned) {
+        selectedHotbarIndex = clamped;
+        if (getInventoryCount(key) <= 0) {
+            pendingInventoryKey = null;
+        }
+        reflectInventorySelection();
+        return true;
+    }
+    return false;
+}
+
+function consumeHotbarItem(index: number, amount: number) {
+    const slot = hotbarSlots[index];
+    if (!slot || !slot.key || slot.count < amount) return false;
+    slot.count -= amount;
+    if (slot.count <= 0) {
+        slot.key = null;
+        slot.count = 0;
+    }
     saveHotbarToStorage();
-    selectHotbar(clamped);
+    reflectHotbar();
+    return true;
+}
+
+function addToHotbarOrInventory(key: string, amount: number) {
+    if (!blockMap.has(key) || amount <= 0) return;
+    let remaining = amount;
+    let updatedHotbar = false;
+    for (const slot of hotbarSlots) {
+        if (slot.key === key && slot.count < HOTBAR_STACK_LIMIT) {
+            const add = Math.min(HOTBAR_STACK_LIMIT - slot.count, remaining);
+            slot.count += add;
+            remaining -= add;
+            if (add > 0) updatedHotbar = true;
+            if (remaining <= 0) break;
+        }
+    }
+    if (remaining > 0) {
+        for (const slot of hotbarSlots) {
+            if (!slot.key || slot.count <= 0) {
+                const add = Math.min(HOTBAR_STACK_LIMIT, remaining);
+                slot.key = key;
+                slot.count = add;
+                remaining -= add;
+                updatedHotbar = true;
+                if (remaining <= 0) break;
+            }
+        }
+    }
+    if (updatedHotbar) {
+        saveHotbarToStorage();
+        reflectHotbar();
+    }
+    if (remaining > 0) {
+        increaseInventoryCount(key, remaining);
+    }
+}
+
+function dropSelectedHotbarItem(amount = 1) {
+    const slot = getSelectedHotbarSlot();
+    if (!slot.key || slot.count < amount) return false;
+    const key = slot.key;
+    if (!consumeHotbarItem(selectedHotbarIndex, amount)) return false;
+    const origin = controls.getObject().position.clone();
+    origin.y += 1.2;
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    forward.setY(0);
+    if (forward.lengthSq() < 1e-3) forward.set(0, 0, -1);
+    forward.normalize();
+    for (let i = 0; i < amount; i++) {
+        const impulse = new THREE.Vector3(
+            forward.x + (Math.random() - 0.5) * 0.6,
+            1.5 + Math.random() * 0.5,
+            forward.z + (Math.random() - 0.5) * 0.6
+        ).multiplyScalar(2.2);
+        spawnDrop(origin.clone(), key, impulse);
+    }
+    return true;
 }
 
 function setPendingInventoryKey(key: string | null) {
     pendingInventoryKey = key && blockMap.has(key) ? key : null;
+    pendingSourceSlot = null;
     reflectInventorySelection();
+    reflectHotbar();
+}
+
+function spawnDrop(position: any, key: string, initialVelocity?: any) {
+    if (!blockMap.has(key)) return;
+    const mesh = new THREE.Mesh(dropGeometry, materialFor(key));
+    mesh.scale.setScalar(0.6);
+    mesh.position.copy(position);
+    mesh.position.x += (Math.random() - 0.5) * 0.2;
+    mesh.position.z += (Math.random() - 0.5) * 0.2;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+    const velocity = initialVelocity ? initialVelocity.clone() : new THREE.Vector3((Math.random() - 0.5) * 2, 2 + Math.random(), (Math.random() - 0.5) * 2);
+    dropItems.push({ mesh, key, velocity, ttl: DROP_LIFETIME });
+}
+
+function collectDrop(index: number, opts: { autoAdd?: boolean } = {}) {
+    const drop = dropItems[index];
+    if (!drop) return;
+    scene.remove(drop.mesh);
+    dropItems.splice(index, 1);
+    if (opts.autoAdd === false) return;
+    addToHotbarOrInventory(drop.key, 1);
+}
+
+function updateDrops(delta: number) {
+    const playerPos = controls.getObject().position;
+    for (let i = dropItems.length - 1; i >= 0; i--) {
+        const item = dropItems[i];
+        item.velocity.y -= DROP_GRAVITY * delta;
+        item.mesh.position.addScaledVector(item.velocity, delta);
+        item.velocity.x *= Math.pow(DROP_DAMPING, delta);
+        item.velocity.z *= Math.pow(DROP_DAMPING, delta);
+        if (item.mesh.position.y < DROP_GROUND_Y) {
+            item.mesh.position.y = DROP_GROUND_Y;
+            if (item.velocity.y < 0) {
+                item.velocity.y *= -DROP_BOUNCE;
+            }
+            item.velocity.x *= DROP_DAMPING;
+            item.velocity.z *= DROP_DAMPING;
+        }
+        item.mesh.rotation.x += delta * 2;
+        item.mesh.rotation.y += delta * 1.5;
+        item.ttl -= delta;
+        if (item.mesh.position.distanceTo(playerPos) < 1.3) {
+            collectDrop(i);
+            continue;
+        }
+        if (item.ttl <= 0) {
+            collectDrop(i, { autoAdd: false });
+        }
+    }
 }
 
 // ---- 簡易永続化（localStorage） ----

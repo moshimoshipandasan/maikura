@@ -19,7 +19,10 @@
             ジャンプ: スペースキー<br/>
             視点操作: マウス<br/>
             ブロックを置く: 右クリック<br/>
-            ブロックを壊す: 左クリック
+            ブロックを壊す: 左クリック<br/>
+            インベントリ: E<br/>
+            ホットバー切替: 数字キー / マウスホイール<br/>
+            アイテムを捨てる: Q（Shift+Qで束ごと）
         </div>
     </div>
     <div id="crosshair">+</div>
@@ -30,32 +33,48 @@
     <div id="hotbar" aria-label="toolbox">
         <button class="slot" type="button" data-index="0">
             <span class="slot-index">1</span>
-            <span class="slot-icon icon-placeholder" aria-hidden="true"></span>
+            <span class="slot-icon" aria-hidden="true"></span>
         </button>
         <button class="slot" type="button" data-index="1">
             <span class="slot-index">2</span>
-            <span class="slot-icon icon-placeholder" aria-hidden="true"></span>
+            <span class="slot-icon" aria-hidden="true"></span>
         </button>
         <button class="slot" type="button" data-index="2">
             <span class="slot-index">3</span>
-            <span class="slot-icon icon-placeholder" aria-hidden="true"></span>
+            <span class="slot-icon" aria-hidden="true"></span>
         </button>
         <button class="slot" type="button" data-index="3">
             <span class="slot-index">4</span>
-            <span class="slot-icon icon-placeholder" aria-hidden="true"></span>
+            <span class="slot-icon" aria-hidden="true"></span>
         </button>
         <button class="slot" type="button" data-index="4">
             <span class="slot-index">5</span>
-            <span class="slot-icon icon-placeholder" aria-hidden="true"></span>
+            <span class="slot-icon" aria-hidden="true"></span>
+        </button>
+        <button class="slot" type="button" data-index="5">
+            <span class="slot-index">6</span>
+            <span class="slot-icon" aria-hidden="true"></span>
+        </button>
+        <button class="slot" type="button" data-index="6">
+            <span class="slot-index">7</span>
+            <span class="slot-icon" aria-hidden="true"></span>
+        </button>
+        <button class="slot" type="button" data-index="7">
+            <span class="slot-index">8</span>
+            <span class="slot-icon" aria-hidden="true"></span>
+        </button>
+        <button class="slot" type="button" data-index="8">
+            <span class="slot-index">9</span>
+            <span class="slot-icon" aria-hidden="true"></span>
         </button>
     </div>
     <div id="inventory" aria-hidden="true">
         <div class="inventory-panel" role="dialog" aria-modal="true" aria-labelledby="inventory-title">
             <div class="inventory-header">
-                <h2 id="inventory-title">アイテムボックス</h2>
+                <h2 id="inventory-title">インベントリ</h2>
                 <button type="button" class="inventory-close" data-action="close" aria-label="閉じる">×</button>
             </div>
-            <p class="inventory-hint">アイテムをクリックしてホットバーへ移動 (E で閉じる)</p>
+            <p class="inventory-hint">インベントリでアイテムをクリックしてホットバーへ移動 (E で閉じる)</p>
             <div class="inventory-grid" role="grid"></div>
         </div>
     </div>
