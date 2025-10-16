@@ -8,6 +8,8 @@
 declare const THREE: any;
 import { formatFps, formatCoords } from './src/world/hud.ts';
 import { FpsLogger, AutoPlayer, installValidationHotkeys, registerValidationContext, runEditStressTest } from './src/world/validation.ts';
+import { BlockId, CHUNK_SIZE, CHUNK_HEIGHT } from './src/world/types.ts';
+import { generateChunk } from './src/world/generator.ts';
 
 // --- シーン、カメラ、レンダラーのセットアップ ---
 const scene = new THREE.Scene();
@@ -42,16 +44,15 @@ directionalLight.shadow.bias = -0.0005; // シャドウアクネ軽減
 scene.add(directionalLight);
 
 // --- ワールド生成 ---
-const objects = [];
-// ワールドを拡張（元: 32）。描画/操作の安定性と相談し 64 に調整。
-const worldSize = 64;
+const objects: any[] = [];
+const blockMeshes = new Map<string, THREE.Mesh>();
+const chunkRadius = 0;
 const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
 // マテリアルは再利用してメモリとパフォーマンスを最適化
 // ---- テクスチャ生成（外部アセットが無い環境でも動く簡易版）----
 function makeCanvas(w:number, h:number) {
     const c = document.createElement('canvas'); c.width=w; c.height=h; return c;
 }
-function rand(n:number){ return Math.floor(Math.random()*n); }
 function lerp(a:number,b:number,t:number){ return a+(b-a)*t; }
 function rgb(r:number,g:number,b:number){ return `rgb(${r|0},${g|0},${b|0})`; }
 function noiseTex(c1:[number,number,number], c2:[number,number,number], w=32, h=32, bias=0.5, contrast=1.1, gamma=1.0) {
@@ -113,6 +114,8 @@ const matStone = new THREE.MeshLambertMaterial({ map: stoneTex() });
 const matSand  = new THREE.MeshLambertMaterial({ map: sandTex() });
 const matWoodSide = new THREE.MeshLambertMaterial({ map: woodSideTex() });
 const matWoodTop  = new THREE.MeshLambertMaterial({ map: woodTopTex() });
+const matMagma = new THREE.MeshLambertMaterial({ color: 0xff5722, emissive: 0x991700 });
+const matObsidian = new THREE.MeshLambertMaterial({ color: 0x2d2d46 });
 
 // ブロック種別（グラスは面ごとに異素材、他は単一）
 const grassMaterials = [
@@ -126,33 +129,98 @@ const grassMaterials = [
 const woodMaterials = [
     matWoodSide, matWoodSide, matWoodTop, matWoodTop, matWoodSide, matWoodSide
 ];
-const materials = [
-  { key: 'grass', label: 'Grass', mat: grassMaterials },
-  { key: 'dirt',  label: 'Dirt',  mat: matDirt       },
-  { key: 'stone', label: 'Stone', mat: matStone      },
-  { key: 'sand',  label: 'Sand',  mat: matSand       },
-  { key: 'wood',  label: 'Wood',  mat: woodMaterials },
-];
-let selectedIndex = 2; // Stone
-function getSelectedMaterial() { return materials[selectedIndex].mat; }
+const waterMaterial = new THREE.MeshLambertMaterial({ color: 0x3f76e4, transparent: true, opacity: 0.65, depthWrite: false });
 
-for (let x = -worldSize / 2; x < worldSize / 2; x++) {
-    for (let z = -worldSize / 2; z < worldSize / 2; z++) {
-        // sinとcosを使って滑らかな地形を生成
-        const height = Math.floor(Math.cos(x / 8) * 4 + Math.sin(z / 8) * 4) + 8;
-        for (let y = 0; y < height; y++) {
-            const isTop = y === height - 1;
-            const material = isTop ? grassMaterials : (y > height - 4 ? matDirt : matStone); // 草（面別）/ 土 / 石
-            const cube = new THREE.Mesh(cubeGeometry, material);
-            cube.position.set(x, y + 0.5, z);
-            // 静的ブロックは影のキャストを無効化（大量オブジェクトでのコスト削減）
-            cube.castShadow = false;
-            cube.receiveShadow = true;
-            scene.add(cube);
-            objects.push(cube);
-        }
-    }
+const OBSIDIAN_DEPTH = 3;
+
+const palette = [
+  { key: 'grass', label: 'Grass', block: BlockId.Grass, mat: grassMaterials },
+  { key: 'dirt', label: 'Dirt', block: BlockId.Dirt, mat: matDirt },
+  { key: 'stone', label: 'Stone', block: BlockId.Stone, mat: matStone },
+  { key: 'sand', label: 'Sand', block: BlockId.Sand, mat: matSand },
+  { key: 'wood', label: 'Wood', block: BlockId.Wood, mat: woodMaterials },
+  { key: 'magma', label: 'Magma', block: BlockId.Magma, mat: matMagma },
+  { key: 'obsidian', label: 'Obsidian', block: BlockId.Obsidian, mat: matObsidian },
+  { key: 'water', label: 'Water', block: BlockId.Water, mat: waterMaterial },
+];
+let selectedIndex = 2;
+const paletteByKey = new Map(palette.map(p => [p.key, p]));
+
+const hotbarEl = document.getElementById('hotbar');
+if (hotbarEl) {
+  hotbarEl.innerHTML = palette.map((entry, i) => `
+    <div class="slot${i === selectedIndex ? ' active' : ''}" data-slot="${i + 1}">${i + 1}<br/>${entry.label}</div>
+  `).join('');
 }
+reflectHotbar();
+
+function materialFor(block: BlockId): any {
+  switch (block) {
+    case BlockId.Grass: return grassMaterials;
+    case BlockId.Dirt: return matDirt;
+    case BlockId.Sand: return matSand;
+    case BlockId.Wood: return woodMaterials;
+    case BlockId.Magma: return matMagma;
+    case BlockId.Obsidian: return matObsidian;
+    case BlockId.Water: return waterMaterial;
+    case BlockId.Stone:
+    default: return matStone;
+  }
+}
+
+function meshKey(wx: number, wy: number, wz: number) {
+  return `${wx},${wy},${wz}`;
+}
+
+function placeBlockMesh(wx: number, wy: number, wz: number, block: BlockId) {
+  if (block === BlockId.Air) return;
+  removeBlockMesh(wx, wy, wz);
+  const mat = materialFor(block);
+  const mesh = new THREE.Mesh(cubeGeometry, mat);
+  mesh.position.set(wx, wy, wz);
+  if (block === BlockId.Water) {
+    mesh.renderOrder = 1;
+    mesh.receiveShadow = false;
+    mesh.castShadow = false;
+  } else {
+    mesh.receiveShadow = true;
+  }
+  scene.add(mesh);
+  if (block !== BlockId.Water) objects.push(mesh);
+  blockMeshes.set(meshKey(wx, wy, wz), mesh);
+}
+
+function removeBlockMesh(wx: number, wy: number, wz: number) {
+  const key = meshKey(wx, wy, wz);
+  const mesh = blockMeshes.get(key);
+  if (!mesh) return;
+  scene.remove(mesh);
+  const idx = objects.indexOf(mesh);
+  if (idx >= 0) objects.splice(idx, 1);
+  blockMeshes.delete(key);
+}
+
+function populateWorld() {
+  for (let cx = -chunkRadius; cx <= chunkRadius; cx++) {
+    for (let cz = -chunkRadius; cz <= chunkRadius; cz++) {
+      const chunk = generateChunk('world-seed', cx, cz);
+      for (let x = 0; x < CHUNK_SIZE; x++) {
+        for (let z = 0; z < CHUNK_SIZE; z++) {
+          const wx = cx * CHUNK_SIZE + x;
+          const wz = cz * CHUNK_SIZE + z;
+          for (let y = 0; y < CHUNK_HEIGHT; y++) {
+            const block = chunk.get(x, y, z);
+            if (block === BlockId.Air) continue;
+            const wy = y + 0.5;
+            placeBlockMesh(wx, wy, wz, block);
+          }
+        }
+      }
+    }
+  }
+}
+
+populateWorld();
 
 
 // --- プレイヤーコントロールと物理演算 ---
@@ -233,6 +301,9 @@ document.addEventListener('keydown', (event) => {
         case 'Digit3': selectHotbar(2); break;
         case 'Digit4': selectHotbar(3); break;
         case 'Digit5': selectHotbar(4); break;
+        case 'Digit6': selectHotbar(5); break;
+        case 'Digit7': selectHotbar(6); break;
+        case 'Digit8': selectHotbar(7); break;
         case 'Space': if (canJump) { playerVelocity.y += 10; canJump = false; } break;
     }
 });
@@ -273,20 +344,24 @@ document.addEventListener('mousedown', (event) => {
         const intersect = intersects[0];
         if (intersect.distance > 8) return; // 届く範囲を制限
 
-        if (event.button === 2) { // 右クリック: ブロックを置く
-            const newCube = new THREE.Mesh(cubeGeometry, getSelectedMaterial());
-            newCube.position.copy(intersect.object.position).add(intersect.face.normal);
-            newCube.castShadow = true;
-            newCube.receiveShadow = true;
-            scene.add(newCube);
-            objects.push(newCube);
-            persistEdit(newCube.position, materials[selectedIndex].key);
-        } else if (event.button === 0) { // 左クリック: ブロックを壊す
-            if (intersect.object !== scene) {
-                persistEdit(intersect.object.position, null);
-                scene.remove(intersect.object);
-                objects.splice(objects.indexOf(intersect.object), 1);
-            }
+        const normal = intersect.face?.normal;
+        if (!normal) return;
+        if (event.button === 2) { // place
+            const selected = palette[selectedIndex];
+            const newCenter = intersect.object.position.clone().add(normal);
+            const wx = Math.round(newCenter.x);
+            const wy = Math.round(newCenter.y * 10) / 10;
+            const wz = Math.round(newCenter.z);
+            removeBlockMesh(wx, wy, wz);
+            placeBlockMesh(wx, wy, wz, selected.block);
+            persistEdit({ x: wx, y: wy, z: wz }, selected.key);
+        } else if (event.button === 0) { // break
+            const center = intersect.object.position;
+            const wx = Math.round(center.x);
+            const wy = Math.round(center.y * 10) / 10;
+            const wz = Math.round(center.z);
+            removeBlockMesh(wx, wy, wz);
+            persistEdit({ x: wx, y: wy, z: wz }, null);
         }
     }
 });
@@ -431,7 +506,15 @@ function animate() {
         const intersects = raycaster.intersectObjects(objects, false);
         if (intersects.length > 0 && intersects[0].distance < 8) {
             const intersect = intersects[0];
-            rollOverMesh.position.copy(intersect.object.position).add(intersect.face.normal);
+            const normal = intersect.face?.normal;
+            if (normal) {
+                const preview = intersect.object.position.clone().add(normal);
+                rollOverMesh.position.set(
+                    Math.round(preview.x),
+                    Math.round(preview.y * 10) / 10,
+                    Math.round(preview.z)
+                );
+            }
             rollOverMesh.visible = true;
         } else {
             rollOverMesh.visible = false;
@@ -463,7 +546,7 @@ registerValidationContext({
     raycaster,
     objects,
     cubeGeometry,
-    placeMaterial: stoneMaterial,
+    placeMaterial: matStone,
     getPlayerPosition: () => ({ ...controls.getObject().position })
 });
 
@@ -503,42 +586,35 @@ function reflectHotbar() {
     const slots = Array.from(document.querySelectorAll('#hotbar .slot')) as HTMLElement[];
     slots.forEach((el, i) => el.classList.toggle('active', i === selectedIndex));
 }
-function selectHotbar(i: number) { selectedIndex = Math.max(0, Math.min(materials.length - 1, i)); reflectHotbar(); }
+function selectHotbar(i: number) { selectedIndex = Math.max(0, Math.min(palette.length - 1, i)); reflectHotbar(); }
 
 // ---- 簡易永続化（localStorage） ----
 type EditMap = { [posKey: string]: string | null };
-function keyFromPos(p: any) { return `${Math.round(p.x*1000)/1000},${Math.round(p.y*1000)/1000},${Math.round(p.z*1000)/1000}`; }
+function keyFromPos(x: number, y: number, z: number) { return `${x},${y},${z}`; }
 const LS_KEY = 'blockworld_edits_v1';
 function loadEdits(): EditMap { try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch { return {}; } }
 function saveEdits(map: EditMap) { try { localStorage.setItem(LS_KEY, JSON.stringify(map)); } catch { /* ignore */ } }
-function persistEdit(pos: any, type: string | null) { const map = loadEdits(); map[keyFromPos(pos)] = type; saveEdits(map); }
-function applyEdits() {
-    const map = loadEdits();
-    const eps = 1e-6;
-    const findAt = (x:number,y:number,z:number) => objects.find((o:any) => Math.abs(o.position.x - x)<eps && Math.abs(o.position.y - y)<eps && Math.abs(o.position.z - z)<eps);
-    for (const [k, v] of Object.entries(map)) {
-        const [x,y,z] = k.split(',').map(Number);
-        const target = findAt(x,y,z);
-        if (v === null) {
-            if (target) { scene.remove(target); objects.splice(objects.indexOf(target),1); }
-        } else {
-            if (!target) {
-                const idx = materials.findIndex(m=>m.key===v);
-                const m = idx>=0? materials[idx].mat : stoneMaterial;
-                const cube = new THREE.Mesh(cubeGeometry, m);
-                cube.position.set(x,y,z);
-                cube.castShadow = true; cube.receiveShadow = true;
-                scene.add(cube); objects.push(cube);
-            } else {
-                const idx = materials.findIndex(m=>m.key===v);
-                const mat = idx>=0? materials[idx].mat : stoneMaterial;
-                target.material = mat;
-            }
-        }
-    }
+
+const editState: EditMap = loadEdits();
+
+function persistEdit(coords: { x: number; y: number; z: number }, key: string | null) {
+  const posKey = keyFromPos(coords.x, coords.y, coords.z);
+  if (key === null) delete editState[posKey];
+  else editState[posKey] = key;
+  saveEdits(editState);
 }
 
-// 初期ロード時に反映
+function applyEdits() {
+  for (const [posKey, blockKey] of Object.entries(editState)) {
+    const [x, y, z] = posKey.split(',').map(Number);
+    removeBlockMesh(x, y, z);
+    if (blockKey) {
+      const entry = paletteByKey.get(blockKey);
+      if (entry) placeBlockMesh(x, y, z, entry.block);
+    }
+  }
+}
+
 applyEdits();
 
 // ---- E2E helpers (for Playwright) ----

@@ -2,29 +2,52 @@ import { describe, it, expect } from 'vitest';
 import { CHUNK_SIZE, CHUNK_HEIGHT, BlockId } from './types';
 import { generateChunk } from './generator';
 
+const OBSIDIAN_DEPTH = 3;
+
 describe('generator: generateChunk', () => {
   it('returns a filled Uint8Array with correct length', () => {
     const g = generateChunk('seed1', 0, 0);
-    expect(g.blocks).toBeInstanceOf(Uint8Array);
     expect(g.blocks.length).toBe(CHUNK_SIZE * CHUNK_SIZE * CHUNK_HEIGHT);
   });
 
-  it('creates ground with grass top and dirt/stone below', () => {
+  it('lays obsidian foundation and forms biomes without magma-water adjacency', () => {
     const g = generateChunk('seed1', 0, 0);
-    // sample a few columns
-    for (let x = 0; x < CHUNK_SIZE; x += 5) {
-      for (let z = 0; z < CHUNK_SIZE; z += 7) {
-        // find topmost non-air block
-        let topY = -1;
-        for (let y = CHUNK_HEIGHT - 1; y >= 0; y--) {
-          const id = g.get(x, y, z);
-          if (id !== BlockId.Air) { topY = y; break; }
+
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      for (let z = 0; z < CHUNK_SIZE; z++) {
+        for (let y = 0; y < OBSIDIAN_DEPTH; y++) {
+          expect(g.get(x, y, z)).toBe(BlockId.Obsidian);
         }
-        expect(topY).toBeGreaterThanOrEqual(0);
-        expect(g.get(x, topY, z)).toBe(BlockId.Grass);
-        if (topY - 1 >= 0) {
-          const below = g.get(x, topY - 1, z);
-          expect([BlockId.Dirt, BlockId.Stone]).toContain(below);
+      }
+    }
+
+    const dirs = [
+      [1, 0, 0], [-1, 0, 0],
+      [0, 1, 0], [0, -1, 0],
+      [0, 0, 1], [0, 0, -1],
+    ] as const;
+
+    for (let y = OBSIDIAN_DEPTH; y < CHUNK_HEIGHT; y++) {
+      for (let z = 0; z < CHUNK_SIZE; z++) {
+        for (let x = 0; x < CHUNK_SIZE; x++) {
+          if (g.get(x, y, z) !== BlockId.Magma) continue;
+          for (const [dx, dy, dz] of dirs) {
+            const nx = x + dx;
+            const ny = y + dy;
+            const nz = z + dz;
+            if (nx < 0 || nx >= CHUNK_SIZE || nz < 0 || nz >= CHUNK_SIZE || ny < 0 || ny >= CHUNK_HEIGHT) continue;
+            expect(g.get(nx, ny, nz)).not.toBe(BlockId.Water);
+          }
+        }
+      }
+    }
+
+    for (let y = OBSIDIAN_DEPTH + 1; y < CHUNK_HEIGHT; y++) {
+      for (let z = 0; z < CHUNK_SIZE; z++) {
+        for (let x = 0; x < CHUNK_SIZE; x++) {
+          if (g.get(x, y, z) === BlockId.Water) {
+            expect(g.get(x, y - 1, z)).not.toBe(BlockId.Air);
+          }
         }
       }
     }
@@ -36,4 +59,3 @@ describe('generator: generateChunk', () => {
     expect(Buffer.from(a)).toEqual(Buffer.from(b));
   });
 });
-

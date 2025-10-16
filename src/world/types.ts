@@ -10,6 +10,8 @@ export enum BlockId {
   Leaves = 5,
   Sand = 6,
   Water = 7,
+  Magma = 8,
+  Obsidian = 9,
 }
 
 export type ChunkKey = {
