@@ -27,12 +27,37 @@
         <div id="fps">FPS: --</div>
         <div id="coords">X:0.0 Y:0.0 Z:0.0</div>
     </div>
-    <div id="hotbar" aria-label="hotbar">
-        <div class="slot" data-slot="1">1<br/>Grass</div>
-        <div class="slot" data-slot="2">2<br/>Dirt</div>
-        <div class="slot active" data-slot="3">3<br/>Stone</div>
-        <div class="slot" data-slot="4">4<br/>Sand</div>
-        <div class="slot" data-slot="5">5<br/>Wood</div>
+    <div id="hotbar" aria-label="toolbox">
+        <button class="slot" type="button" data-index="0">
+            <span class="slot-index">1</span>
+            <span class="slot-icon icon-placeholder" aria-hidden="true"></span>
+        </button>
+        <button class="slot" type="button" data-index="1">
+            <span class="slot-index">2</span>
+            <span class="slot-icon icon-placeholder" aria-hidden="true"></span>
+        </button>
+        <button class="slot" type="button" data-index="2">
+            <span class="slot-index">3</span>
+            <span class="slot-icon icon-placeholder" aria-hidden="true"></span>
+        </button>
+        <button class="slot" type="button" data-index="3">
+            <span class="slot-index">4</span>
+            <span class="slot-icon icon-placeholder" aria-hidden="true"></span>
+        </button>
+        <button class="slot" type="button" data-index="4">
+            <span class="slot-index">5</span>
+            <span class="slot-icon icon-placeholder" aria-hidden="true"></span>
+        </button>
+    </div>
+    <div id="inventory" aria-hidden="true">
+        <div class="inventory-panel" role="dialog" aria-modal="true" aria-labelledby="inventory-title">
+            <div class="inventory-header">
+                <h2 id="inventory-title">アイテムボックス</h2>
+                <button type="button" class="inventory-close" data-action="close" aria-label="閉じる">×</button>
+            </div>
+            <p class="inventory-hint">アイテムをクリックしてホットバーへ移動 (E で閉じる)</p>
+            <div class="inventory-grid" role="grid"></div>
+        </div>
     </div>
     <script type="module" src="index.tsx"></script>
 </body>
