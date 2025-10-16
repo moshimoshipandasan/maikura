@@ -1,52 +1,41 @@
 # Repository Guidelines
 
-This guide sets shared, minimal expectations for contributors to this game project. Read once before opening a PR.
-
 ## Project Structure & Module Organization
-
-- Entry points: `index.tsx` (runtime), `index.html` (markup), `index.css` (styles).
-- Source lives in `src/` (game logic under `src/world/`).
-- Tests are colocated as `*.test.ts` next to code (e.g., `src/world/renderer.test.ts`).
-- Static assets are served from `public/` (path `/`).
-- Vite alias: `@` → project root.
+- Runtime entry point: `index.tsx`; markup and styles live in `index.html` and `index.css`.
+- Gameplay logic is in `src/`, with world systems under `src/world/`. Use `@/` when importing from the project root (e.g., `import { Chunk } from '@/world/chunk'`).
+- Tests sit next to their subjects as `*.test.ts` files. Static assets are served from `public/` and resolve at `/`.
 
 ## Build, Test, and Development Commands
-
-- `npm install` — install/refresh dependencies.
-- `npm run dev` — start Vite dev server with HMR at `http://localhost:3000` (`host 0.0.0.0`).
-- `npm run build` — build optimized bundle to `dist/`.
-- `npm run preview` — serve `dist/` locally to mimic production hosting.
-- `npx tsc --noEmit` — type‑check only.
-- `npm run test` / `npm run test:watch` — run Vitest once / watch mode.
+- `npm install` — refresh dependencies before attempting builds.
+- `npm run dev` — launch the Vite dev server at `http://localhost:3000` with HMR; ideal for manual smoke tests.
+- `npm run build` — produce the production bundle in `dist/`.
+- `npm run preview` — serve `dist/` locally to validate deployment behavior.
+- `npx tsc --noEmit` — perform a type-only check without generating output.
+- `npm run test` / `npm run test:watch` — execute Vitest once or in watch mode for rapid iterations.
 
 ## Coding Style & Naming Conventions
-
-- Language: TypeScript; indentation: four spaces.
-- Naming: `camelCase` for vars/functions; `PascalCase` for exported classes.
-- Structure gameplay as pure functions or small classes; keep `index.tsx` for bootstrapping only.
-- Comments: keep brief; explain math/physics intent.
-- Formatting/linting: no enforced formatter here; keep diffs small and consistent; rely on `tsc` for type safety.
+- Language is TypeScript with four-space indentation; prefer pure functions or small classes for gameplay logic.
+- Use `camelCase` for variables/functions and `PascalCase` for exported classes/components.
+- Keep `index.tsx` limited to bootstrapping and wiring; push mechanics into `src/world/`.
+- No enforced formatter; favor tight diffs and consistent style. Let `tsc` enforce type safety.
 
 ## Testing Guidelines
-
-- Framework: Vitest. Keep tests fast, deterministic, and colocated as `*.test.ts`.
-- Run: `npm run test` (CI) or `npm run test:watch` (local).
-- Manual 3D smoke: `npm run dev`, acquire Pointer Lock, verify WASD/ジャンプ、設置/破壊、HUD（FPS/座標）とリサイズが例外なく動作。
+- Framework: Vitest. Co-locate tests beside implementation (`renderer.test.ts` next to `renderer.ts`).
+- Target deterministic, fast specs; stub external state as needed.
+- Run `npm run test` in CI scenarios, and `npm run test:watch` while developing.
+- Manual 3D verification: `npm run dev`, grab pointer lock, confirm WASD movement, jump/place/break, HUD metrics, and responsive resizing behave without glitches.
 
 ## Commit & Pull Request Guidelines
-
-- Conventional Commits (`feat:`, `fix:`, `chore:`). One logical change per commit.
-- PRs must include: short summary, validation steps (commands, browsers), and screenshots/video for UI changes. Link issues/TODOs.
-- Keep branches focused; prefer small, reviewable diffs.
+- Follow Conventional Commits (`feat:`, `fix:`, `chore:`). Keep each commit focused on one logical change.
+- Pull requests should summarize intent, list validation steps (commands/browsers), and include screenshots or video for UI tweaks.
+- Link related issues or TODOs, and explain any follow-up work so reviewers know what remains.
 
 ## Security & Configuration Tips
+- Three.js is CDN-loaded and pinned to `0.128.0`; upgrade intentionally and test pointer-lock flows.
+- Pointer Lock requires HTTPS or `npm run preview`; verify interactions before shipping.
+- Never commit secrets. Use `import.meta.env.*` and map through `vite.config.ts` to `process.env`.
 
-- Three.js is CDN‑loaded and version‑pinned (currently `0.128.0`). Upgrade deliberately.
-- Pointer Lock requires a secure context; verify via `npm run preview` before deploying.
-- Do not commit secrets. Use `import.meta.env` (e.g., `GEMINI_API_KEY`), mapped to `process.env.*` via `vite.config.ts`.
-- Vite dev server defaults: `host 0.0.0.0`, `port 3000`.
-
-## Agent‑Specific Instructions
-
-- Internal reasoning in English; external comms (commits/PRs/reviews) in Japanese for the team.
-
+## Agent-Specific Instructions
+- Keep reasoning and experimentation in English, but present commits, PRs, reviews, and explanations in Japanese.
+- Do not revert existing uncommitted changes unless explicitly instructed.
+- Coordinate with the team by keeping branches short-lived and diffs review-friendly.
