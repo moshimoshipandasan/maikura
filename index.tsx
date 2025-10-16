@@ -114,6 +114,16 @@ const matSand  = new THREE.MeshLambertMaterial({ map: sandTex() });
 const matWoodSide = new THREE.MeshLambertMaterial({ map: woodSideTex() });
 const matWoodTop  = new THREE.MeshLambertMaterial({ map: woodTopTex() });
 
+function snowTex(){ return noiseTex([225, 230, 240],[255,255,255],32,32,0.65,1.02,1.1); }
+function mudTex(){ return noiseTex([62,45,32],[90,65,48],32,32,0.55,1.18,0.9); }
+function mossTex(){ return noiseTex([35,90,45],[70,150,80],32,32,0.45,1.2,1.05); }
+function obsidianTex(){ return noiseTex([25, 20, 45],[55, 40, 85],32,32,0.45,1.25,1.2); }
+
+const matSnow = new THREE.MeshLambertMaterial({ map: snowTex() });
+const matMud  = new THREE.MeshLambertMaterial({ map: mudTex() });
+const matMoss = new THREE.MeshLambertMaterial({ map: mossTex() });
+const matObsidian = new THREE.MeshLambertMaterial({ map: obsidianTex() });
+
 // ブロック種別（グラスは面ごとに異素材、他は単一）
 const grassMaterials = [
     matGrassSide, // +X 右
@@ -126,28 +136,116 @@ const grassMaterials = [
 const woodMaterials = [
     matWoodSide, matWoodSide, matWoodTop, matWoodTop, matWoodSide, matWoodSide
 ];
-const materials = [
-  { key: 'grass', label: 'Grass', mat: grassMaterials },
-  { key: 'dirt',  label: 'Dirt',  mat: matDirt       },
-  { key: 'stone', label: 'Stone', mat: matStone      },
-  { key: 'sand',  label: 'Sand',  mat: matSand       },
-  { key: 'wood',  label: 'Wood',  mat: woodMaterials },
+type BlockDef = {
+    key: string;
+    label: string;
+    mat: any;
+    iconClass: string;
+};
+
+const blockCatalog: BlockDef[] = [
+  { key: 'grass', label: 'Grass', mat: grassMaterials, iconClass: 'icon-grass' },
+  { key: 'dirt',  label: 'Dirt',  mat: matDirt,        iconClass: 'icon-dirt' },
+  { key: 'stone', label: 'Stone', mat: matStone,       iconClass: 'icon-stone' },
+  { key: 'sand',  label: 'Sand',  mat: matSand,        iconClass: 'icon-sand' },
+  { key: 'wood',  label: 'Wood',  mat: woodMaterials,  iconClass: 'icon-wood' },
+  { key: 'snow',  label: 'Snow',  mat: matSnow,        iconClass: 'icon-snow' },
+  { key: 'mud',   label: 'Mud',   mat: matMud,         iconClass: 'icon-mud' },
+  { key: 'moss',  label: 'Moss',  mat: matMoss,        iconClass: 'icon-moss' },
+  { key: 'obsidian', label: 'Obsidian', mat: matObsidian, iconClass: 'icon-obsidian' },
 ];
-let selectedIndex = 2; // Stone
-function getSelectedMaterial() { return materials[selectedIndex].mat; }
+
+const blockMap = new Map(blockCatalog.map((entry) => [entry.key, entry]));
+
+const DEFAULT_HOTBAR: string[] = ['grass', 'dirt', 'stone', 'sand', 'wood'];
+let hotbarKeys: string[] = [...DEFAULT_HOTBAR];
+let selectedHotbarIndex = 2; // Stone
+const HOTBAR_LS_KEY = 'blockworld_hotbar_v1';
+
+function getBlockDef(key: string): BlockDef {
+    return blockMap.get(key) ?? blockMap.get('stone')!;
+}
+function getSelectedBlockKey() { return hotbarKeys[selectedHotbarIndex]; }
+function getSelectedMaterial() { return getBlockDef(getSelectedBlockKey()).mat; }
+
+function loadHotbarFromStorage() {
+    try {
+        const raw = JSON.parse(localStorage.getItem(HOTBAR_LS_KEY) ?? '[]');
+        if (Array.isArray(raw)) {
+            for (let i = 0; i < hotbarKeys.length; i++) {
+                const candidate = raw[i];
+                hotbarKeys[i] = (typeof candidate === 'string' && blockMap.has(candidate)) ? candidate : DEFAULT_HOTBAR[i];
+            }
+        }
+    } catch {
+        hotbarKeys = [...DEFAULT_HOTBAR];
+    }
+}
+
+function saveHotbarToStorage() {
+    try {
+        localStorage.setItem(HOTBAR_LS_KEY, JSON.stringify(hotbarKeys));
+    } catch {
+        /* ignore */
+    }
+}
+
+type BiomeProfile = {
+    top: string;
+    subsurface: string;
+    deep: string;
+    transitionDepth: number;
+    heightOffset: number;
+};
+
+function sampleBiome(x: number, z: number): BiomeProfile {
+    const heat = Math.sin(x / 24) + Math.cos(z / 31);
+    const moisture = Math.sin((x + z) / 37) + Math.cos((x - z) / 29);
+    if (heat > 1.2) {
+        return { top: 'sand', subsurface: 'sand', deep: 'stone', transitionDepth: 5, heightOffset: -1 };
+    }
+    if (heat < -1.1) {
+        return { top: 'snow', subsurface: 'stone', deep: 'stone', transitionDepth: 4, heightOffset: 1 };
+    }
+    if (moisture > 1.0) {
+        return { top: 'mud', subsurface: 'mud', deep: 'stone', transitionDepth: 4, heightOffset: -0.5 };
+    }
+    if (moisture < -1.0) {
+        return { top: 'moss', subsurface: 'dirt', deep: 'stone', transitionDepth: 3, heightOffset: 0 };
+    }
+    return { top: 'grass', subsurface: 'dirt', deep: 'stone', transitionDepth: 3, heightOffset: 0 };
+}
+
+function materialFor(key: string) {
+    return getBlockDef(key).mat;
+}
+
+loadHotbarFromStorage();
 
 for (let x = -worldSize / 2; x < worldSize / 2; x++) {
     for (let z = -worldSize / 2; z < worldSize / 2; z++) {
-        // sinとcosを使って滑らかな地形を生成
-        const height = Math.floor(Math.cos(x / 8) * 4 + Math.sin(z / 8) * 4) + 8;
+        const biome = sampleBiome(x, z);
+        const terrainBase = Math.cos(x / 8) * 3.5 + Math.sin(z / 8) * 3.5;
+        const height = Math.max(2, Math.floor(terrainBase + 8 + biome.heightOffset));
         for (let y = 0; y < height; y++) {
-            const isTop = y === height - 1;
-            const material = isTop ? grassMaterials : (y > height - 4 ? matDirt : matStone); // 草（面別）/ 土 / 石
+            const layerFromTop = (height - 1) - y;
+            let blockKey: string;
+            if (y === height - 1) {
+                blockKey = biome.top;
+            } else if (layerFromTop < biome.transitionDepth) {
+                blockKey = biome.subsurface;
+            } else {
+                blockKey = biome.deep;
+            }
+            if (y === 0) {
+                blockKey = 'obsidian';
+            }
+            const material = materialFor(blockKey);
             const cube = new THREE.Mesh(cubeGeometry, material);
             cube.position.set(x, y + 0.5, z);
-            // 静的ブロックは影のキャストを無効化（大量オブジェクトでのコスト削減）
             cube.castShadow = false;
             cube.receiveShadow = true;
+            cube.userData.blockKey = blockKey;
             scene.add(cube);
             objects.push(cube);
         }
@@ -162,6 +260,11 @@ const instructions = document.getElementById('instructions');
 const crosshair = document.getElementById('crosshair');
 // 検証用表示領域（HUD下部に追加）
 const hud = document.getElementById('hud');
+const hotbarEl = document.getElementById('hotbar');
+const inventoryEl = document.getElementById('inventory');
+const inventoryGrid = inventoryEl?.querySelector('.inventory-grid') as HTMLElement | null;
+const inventoryCloseBtn = inventoryEl?.querySelector('[data-action="close"]') as HTMLButtonElement | null;
+const inventoryHint = inventoryEl?.querySelector('.inventory-hint') as HTMLElement | null;
 const validationEl = document.createElement('div');
 validationEl.id = 'validation';
 validationEl.style.marginTop = '6px';
@@ -169,11 +272,20 @@ validationEl.style.opacity = '0.85';
 validationEl.textContent = 'Validation: (T=both / Y=auto / U=fps)';
 hud?.appendChild(validationEl);
 
+let inventoryOpen = false;
+let pendingInventoryKey: string | null = null;
+let relockAfterInventory = false;
+
 instructions?.addEventListener('click', () => { controls.lock(); }, false);
 controls.addEventListener('lock', () => {
-    if (blocker && crosshair) {
+    if (blocker) {
         blocker.style.display = 'none';
-        crosshair.style.display = 'block';
+    }
+    if (crosshair) {
+        crosshair.style.display = inventoryOpen ? 'none' : 'block';
+    }
+    if (inventoryOpen) {
+        applyInventoryVisibility();
     }
     // URL パラメータでの自動テスト起動
     const params = new URLSearchParams(location.search);
@@ -185,9 +297,21 @@ controls.addEventListener('lock', () => {
     }
 });
 controls.addEventListener('unlock', () => {
-    if (blocker && crosshair) {
-        blocker.style.display = 'flex';
-        crosshair.style.display = 'none';
+    if (inventoryOpen) {
+        if (blocker) {
+            blocker.style.display = 'none';
+        }
+        if (crosshair) {
+            crosshair.style.display = 'none';
+        }
+        applyInventoryVisibility();
+    } else {
+        if (blocker) {
+            blocker.style.display = 'flex';
+        }
+        if (crosshair) {
+            crosshair.style.display = 'none';
+        }
     }
 });
 
@@ -221,7 +345,109 @@ const baseSpeed = 10.0;
 const gravity = 30.0;
 let canJump = false;
 
+function clearMovementState() {
+    moveState.forward = false;
+    moveState.backward = false;
+    moveState.left = false;
+    moveState.right = false;
+    moveState.sprint = false;
+}
+
+function applyInventoryVisibility() {
+    if (inventoryEl) {
+        inventoryEl.classList.toggle('open', inventoryOpen);
+        inventoryEl.setAttribute('aria-hidden', inventoryOpen ? 'false' : 'true');
+    }
+    document.body.classList.toggle('inventory-open', inventoryOpen);
+    if (crosshair) {
+        crosshair.style.display = inventoryOpen ? 'none' : (controls.isLocked ? 'block' : 'none');
+    }
+    if (blocker && inventoryOpen) {
+        blocker.style.display = 'none';
+    }
+}
+
+function openInventory() {
+    if (inventoryOpen) return;
+    inventoryOpen = true;
+    relockAfterInventory = controls.isLocked;
+    if (relockAfterInventory) {
+        controls.unlock();
+    }
+    clearMovementState();
+    playerVelocity.x = 0;
+    playerVelocity.z = 0;
+    setPendingInventoryKey(getSelectedBlockKey());
+    applyInventoryVisibility();
+}
+
+function closeInventory() {
+    if (!inventoryOpen) return;
+    inventoryOpen = false;
+    applyInventoryVisibility();
+    setPendingInventoryKey(null);
+    if (relockAfterInventory) {
+        controls.lock();
+    }
+    relockAfterInventory = false;
+}
+
+applyInventoryVisibility();
+buildInventoryGrid();
+reflectInventorySelection();
+selectHotbar(selectedHotbarIndex);
+
+inventoryGrid?.addEventListener('click', (event) => {
+    const target = (event.target as HTMLElement).closest('.inventory-slot') as HTMLElement | null;
+    if (!target) return;
+    event.preventDefault();
+    const key = target.dataset.key ?? null;
+    if (!key) return;
+    if (pendingInventoryKey === key && inventoryOpen) {
+        assignHotbarSlot(selectedHotbarIndex, key);
+    } else {
+        setPendingInventoryKey(key);
+    }
+});
+
+hotbarEl?.addEventListener('click', (event) => {
+    const target = (event.target as HTMLElement).closest('.slot') as HTMLElement | null;
+    if (!target) return;
+    event.preventDefault();
+    const index = Number(target.dataset.index ?? '-1');
+    if (Number.isNaN(index)) return;
+    if (pendingInventoryKey) {
+        assignHotbarSlot(index, pendingInventoryKey);
+        setPendingInventoryKey(pendingInventoryKey);
+    } else if (inventoryOpen) {
+        const keyForSlot = hotbarKeys[index] ?? DEFAULT_HOTBAR[index] ?? 'stone';
+        setPendingInventoryKey(keyForSlot);
+        selectHotbar(index);
+    } else {
+        selectHotbar(index);
+    }
+});
+
+inventoryCloseBtn?.addEventListener('click', () => closeInventory());
+inventoryEl?.addEventListener('click', (event) => {
+    if (event.target === inventoryEl) {
+        closeInventory();
+    }
+});
+
 document.addEventListener('keydown', (event) => {
+    if (event.code === 'KeyE') {
+        event.preventDefault();
+        if (inventoryOpen) { closeInventory(); } else { openInventory(); }
+        return;
+    }
+    if (inventoryOpen) {
+        if (event.code === 'Escape') {
+            event.preventDefault();
+            closeInventory();
+        }
+        return;
+    }
     switch (event.code) {
         case 'KeyW': moveState.forward = true; break;
         case 'KeyA': moveState.left = true; break;
@@ -238,6 +464,7 @@ document.addEventListener('keydown', (event) => {
 });
 
 document.addEventListener('keyup', (event) => {
+    if (inventoryOpen) return;
     switch (event.code) {
         case 'KeyW': moveState.forward = false; break;
         case 'KeyA': moveState.left = false; break;
@@ -264,6 +491,10 @@ const DOWN = new THREE.Vector3(0, -1, 0);
 const UP = new THREE.Vector3(0, 1, 0);
 
 document.addEventListener('mousedown', (event) => {
+    if (inventoryOpen) {
+        event.preventDefault();
+        return;
+    }
     if (!controls.isLocked) return;
 
     raycaster.setFromCamera({ x: 0, y: 0 }, camera);
@@ -274,13 +505,15 @@ document.addEventListener('mousedown', (event) => {
         if (intersect.distance > 8) return; // 届く範囲を制限
 
         if (event.button === 2) { // 右クリック: ブロックを置く
+            const blockKey = getSelectedBlockKey();
             const newCube = new THREE.Mesh(cubeGeometry, getSelectedMaterial());
             newCube.position.copy(intersect.object.position).add(intersect.face.normal);
             newCube.castShadow = true;
             newCube.receiveShadow = true;
+            newCube.userData.blockKey = blockKey;
             scene.add(newCube);
             objects.push(newCube);
-            persistEdit(newCube.position, materials[selectedIndex].key);
+            persistEdit(newCube.position, blockKey);
         } else if (event.button === 0) { // 左クリック: ブロックを壊す
             if (intersect.object !== scene) {
                 persistEdit(intersect.object.position, null);
@@ -463,7 +696,7 @@ registerValidationContext({
     raycaster,
     objects,
     cubeGeometry,
-    placeMaterial: stoneMaterial,
+    placeMaterial: materialFor('stone'),
     getPlayerPosition: () => ({ ...controls.getObject().position })
 });
 
@@ -498,12 +731,78 @@ installValidationHotkeys({
     }
 }
 
-// ---- ホットバーの見た目更新と選択 ----
+// ---- ホットバー & インベントリ ----
+function buildInventoryGrid() {
+    if (!inventoryGrid) return;
+    inventoryGrid.innerHTML = '';
+    blockCatalog.forEach((block) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'inventory-slot';
+        button.dataset.key = block.key;
+        button.setAttribute('aria-label', block.label);
+        button.setAttribute('title', block.label);
+        const icon = document.createElement('span');
+        icon.className = `item-icon ${block.iconClass}`;
+        icon.setAttribute('aria-hidden', 'true');
+        icon.dataset.key = block.key;
+        button.appendChild(icon);
+        inventoryGrid.appendChild(button);
+    });
+}
+
+function reflectInventorySelection() {
+    if (!inventoryGrid) return;
+    const slots = Array.from(inventoryGrid.querySelectorAll('.inventory-slot')) as HTMLElement[];
+    slots.forEach((slot) => {
+        slot.classList.toggle('selected', pendingInventoryKey === slot.dataset.key);
+    });
+    if (inventoryHint) {
+        if (pendingInventoryKey) {
+            const block = getBlockDef(pendingInventoryKey);
+            inventoryHint.textContent = `${block.label} を選択中 (ホットバーをクリック)`;
+        } else {
+            inventoryHint.textContent = 'アイテムをクリックしてホットバーへ移動 (E で閉じる)';
+        }
+    }
+}
+
 function reflectHotbar() {
     const slots = Array.from(document.querySelectorAll('#hotbar .slot')) as HTMLElement[];
-    slots.forEach((el, i) => el.classList.toggle('active', i === selectedIndex));
+    slots.forEach((el, i) => {
+        const key = hotbarKeys[i] ?? DEFAULT_HOTBAR[i] ?? getSelectedBlockKey();
+        const def = getBlockDef(key);
+        const icon = el.querySelector('.slot-icon') as HTMLElement | null;
+        if (icon) {
+            icon.className = `slot-icon item-icon ${def.iconClass}`;
+            icon.setAttribute('title', def.label);
+            icon.setAttribute('aria-hidden', 'true');
+            icon.dataset.key = def.key;
+        }
+        el.dataset.index = String(i);
+        el.dataset.key = key;
+        el.setAttribute('aria-label', `スロット${i + 1}: ${def.label}`);
+        el.classList.toggle('active', i === selectedHotbarIndex);
+    });
 }
-function selectHotbar(i: number) { selectedIndex = Math.max(0, Math.min(materials.length - 1, i)); reflectHotbar(); }
+
+function selectHotbar(i: number) {
+    selectedHotbarIndex = Math.max(0, Math.min(hotbarKeys.length - 1, i));
+    reflectHotbar();
+}
+
+function assignHotbarSlot(index: number, key: string) {
+    if (!blockMap.has(key)) return;
+    const clamped = Math.max(0, Math.min(hotbarKeys.length - 1, index));
+    hotbarKeys[clamped] = key;
+    saveHotbarToStorage();
+    selectHotbar(clamped);
+}
+
+function setPendingInventoryKey(key: string | null) {
+    pendingInventoryKey = key && blockMap.has(key) ? key : null;
+    reflectInventorySelection();
+}
 
 // ---- 簡易永続化（localStorage） ----
 type EditMap = { [posKey: string]: string | null };
@@ -523,16 +822,15 @@ function applyEdits() {
             if (target) { scene.remove(target); objects.splice(objects.indexOf(target),1); }
         } else {
             if (!target) {
-                const idx = materials.findIndex(m=>m.key===v);
-                const m = idx>=0? materials[idx].mat : stoneMaterial;
-                const cube = new THREE.Mesh(cubeGeometry, m);
+                const material = materialFor(v);
+                const cube = new THREE.Mesh(cubeGeometry, material);
                 cube.position.set(x,y,z);
                 cube.castShadow = true; cube.receiveShadow = true;
+                cube.userData.blockKey = v;
                 scene.add(cube); objects.push(cube);
             } else {
-                const idx = materials.findIndex(m=>m.key===v);
-                const mat = idx>=0? materials[idx].mat : stoneMaterial;
-                target.material = mat;
+                target.material = materialFor(v);
+                target.userData.blockKey = v;
             }
         }
     }
