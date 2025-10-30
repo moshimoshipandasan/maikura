@@ -1,97 +1,55 @@
 # ブロックワールド（Vite + Three.js）
 
-指向性ライト付きの 3D サンドボックスです。Procedural な地形発生、ブロック設置/破壊、ホットバー付き HUD、開発者向けバリデーション機能を備えています。最新版では初期メニューとワールド管理を追加し、シード/地形/HUD を切り替えながら、TNT の点火〜連鎖爆発を含むサンドボックス体験を保存・再開できるようになりました。
+Procedural に地形を生成し、WASD で歩き回れるサンドボックス型 3D ゲームです。ブロックの設置/破壊や HUD 表示、Pointer Lock を活かした没入感ある操作を備えています。
 
-## プロジェクト概要
-- ランタイムエントリ: `index.tsx`
-- マークアップ / スタイル: `index.html`, `index.css`
-- ゲームロジック: `src/world/`（型、チャンク生成、メッシング、入力、HUD など）
-- バンドラ: [Vite](https://vitejs.dev/)（エイリアス `@` → プロジェクトルート）
-- レンダリング: [Three.js 0.128.0](https://threejs.org/) を CDN から読み込み
+- エントリーポイント: `index.tsx`
+- ソース: `src/`（ゲームロジックは `src/world/` 以下）
+- テスト: 各モジュール横に `*.test.ts`
+- アセット: `public/`
+- Vite エイリアス: `@` → プロジェクトルート
 
 ## 主な機能
-- 16×16×128 チャンクの高さマップ生成（Grass / Dirt / Sand / Snow などのバイオーム）
-- ホットバー & インベントリ UI からのブロック設置 / 破壊（射程 8）
-- ローカルストレージでの編集永続化（再訪時に復元）
-- HUD（FPS / 座標表示）と検証用オーバーレイ（FPS ロガー、オートプレイ）
-- **ワールドメニュー**: 複数ワールドの作成・切替・初期化・削除、地形プリセットや HUD 表示の切替、手動保存をサポート
-- **TNT ブロック**: 左クリックで点火 → 約 2.8 秒後に爆発。半径内ブロックを破壊し、TNT は連鎖点火、Obsidian は耐性あり
-- Pointer Lock コントロール + WASD 移動（壁衝突 & 自動ジャンプ対応）
+- 16×16×128 チャンク構造の Procedural 地形生成（草原/砂/雪 などのバイオーム）
+- ブロック設置/破壊とホットバー UI
+- FPS / 座標表示 HUD とオートテスト向けオーバーレイ
+- TNT ブロックの連鎖爆発演出（Obsidian は耐爆仕様）
+- Pointer Lock + WASD/Space/Shift による移動、`E` でインベントリ操作
 
-## セットアップと実行
-前提: Node.js（LTS 推奨）
+## セットアップ
+事前条件: Node.js（LTS 系推奨）
 
 ```bash
-npm install                    # 依存関係の取得
-cp .env.local.example .env.local  # 必要に応じて環境変数を設定（GEMINI_API_KEY など）
-npm run dev                    # http://localhost:3000 で開発サーバー起動
+npm install
+cp .env.local.example .env.local   # 必要なら API キーなどを設定
+npm run dev                        # http://localhost:3000 で開発サーバー起動
 ```
 
-その他コマンド:
-- `npm run build` : 最適化ビルドを `dist/` に生成
-- `npm run preview` : ビルド済み `dist/` をローカルで配信
-- `npx tsc --noEmit` : 型チェックのみ
+### 利用できるスクリプト
+- `npm run dev` : Vite 開発サーバー（HMR 付き）
+- `npm run build` : 最適化ビルドを `dist/` に出力
+- `npm run preview` : `dist/` をローカル配信（Pointer Lock の動作確認用）
+- `npx tsc --noEmit` : 型チェックのみを実行
+- `npm run test` / `npm run test:watch` : Vitest によるユニットテスト
+- `npx playwright test` : E2E テスト（Chromium などのインストールが必要）
 
 ## 操作方法
-- 視点: マウス（画面クリックで Pointer Lock を取得）
-- 移動: `W` `A` `S` `D`
-- ジャンプ: `Space`
-- スプリント: `Shift`（速度 ×1.8）
-- ブロック設置: 右クリック（ホットバーに応じたブロック）
-- ブロック破壊: 左クリック
-- **TNT**: 左クリックで点火。約 2.8 秒後に爆発し、隣接 TNT は 1.2 秒で連鎖
-- ホットバー切替: `1`〜`5` または枠をクリック
-- インベントリ: `E` で開閉（ホットバーへのドラッグ＆ドロップ代替）
-- メインメニュー: `M` または `Esc`（Pointer Lock 解除後）で呼び出し
-
-## メニューとワールド管理
-- 起動直後はメニューが開きます。右側パネルでワールド名・シード・地形タイプ（ノーマル/フラット/ダイナミック）・HUD 表示の有無を設定できます。
-- 「プレイ開始」で選択中ワールドを読み込みつつメニューを閉じます。`M` でいつでも再度メニューを開けます。
-- 「変更を保存」は設定のみ更新してメニューを継続表示します。現在のワールドに切り替えた場合も保存されます。
-- 「ワールド初期化」は編集履歴を消去し、生成直後の地形に戻します（確認ダイアログ付き）。
-- 「ワールド削除」は選択中ワールドを削除します。最後のワールドは削除できません。
-- 「新しいワールド」でランダムシード付きの新規ワールドを作成できます。作成後は自動でプレイ/設定更新が可能です。
-## 開発者向けホットキー（Pointer Lock 取得後）
-- `T`: 30 秒 FPS ログ + オートプレイ開始
-- `U`: 30 秒 FPS ログのみ
-- `Y`: オートプレイの ON / OFF
-- `I`: Edit Stress テスト（設置/破壊 100 回）
-- URL パラメータ: `/?autotest=1&secs=30`, `/?editstress=100`
-- ショートカット: `npm run dev:auto`（autotest パラメータ付きで起動）
+- `W` `A` `S` `D` : 移動
+- `Space` : ジャンプ
+- `Shift` : スプリント
+- マウス左/右クリック : ブロック破壊 / 設置
+- `E` : インベントリ（ホットバー）とインタラクション
+- `M` または `Esc` : Pointer Lock の解除
 
 ## テスト
-Vitest と Playwright を使用しています。
+- `npm run test` でユニットテストを実行（Vitest）
+- `npx playwright test` で E2E テスト（Pointer Lock、HUD、設置/破壊など）を検証
 
-```bash
-# ユニットテスト
-npm run test
+## コントリビュート歓迎
+MIT ライセンスのもとで開発しています。バグ修正や機能追加のプルリクエストを歓迎します。PR の際は以下をご確認ください。
 
-# エンドツーエンド（Chromium）
-npx playwright install chromium
-npx playwright test
-```
-- `e2e/smoke.spec.ts`: Pointer Lock, HUD 更新, 設置/破壊, リサイズ, コンソール無エラーを検証
-- `e2e/editstress.spec.ts`: 設置/破壊 100 回後の座標誤差 ≤ 0.01 を検証
+1. `npm run test` など関連するテストを実行し、結果を明記してください。
+2. UI に影響する場合はスクリーンショットや動画を添付してください。
+3. Conventional Commits（例: `feat:`, `fix:`）のスタイルでコミットメッセージをまとめてください。
 
-## ディレクトリ構成
-```
-index.tsx             # Three.js シーンとゲームループ
-index.html / .css     # UI テンプレートとスタイル
-src/world/            # コアロジック（types, generator, mesher, input, HUD 等）
-e2e/                  # Playwright スクリプト
-.sdd/                 # 仕様・検証ドキュメント
-public/               # 静的アセット
-```
-
-## 技術スタック
-- **Three.js 0.128.0** — WebGL レンダリング
-- **Vite + TypeScript** — 開発サーバーとバンドラ
-- **Vitest** — ユニットテスト
-- **Playwright** — ブラウザ E2E テスト
-
-## 今後のアイデア
-- TNT 用のパーティクル / サウンドエフェクト追加
-- Chunk Manager と Three.js メッシュの統合による大規模ワールド化
-- IndexedDB バックエンドによるより堅牢な永続化
-
-スクリーンショットは `docs/screenshots/` を参照してください。
+## ライセンス
+MIT License
