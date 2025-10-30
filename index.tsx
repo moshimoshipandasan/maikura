@@ -6,7 +6,7 @@
 // THREEとPointerLockControlsはCDNからロードされるため、
 // 型エラーを避けるためにTypeScriptにグローバル変数として宣言します。
 declare const THREE: any;
-import { formatFps, formatCoords } from './src/world/hud.ts';
+import { formatFps, formatCoords, getHeartStates } from './src/world/hud.ts';
 import { FpsLogger, AutoPlayer, installValidationHotkeys, registerValidationContext, runEditStressTest } from './src/world/validation.ts';
 
 // --- シーン、カメラ、レンダラーのセットアップ ---
@@ -160,27 +160,37 @@ type BlockDef = {
     label: string;
     mat: any;
     iconClass: string;
+    hardness: number;
 };
 
 const blockCatalog: BlockDef[] = [
-  { key: 'grass', label: 'Grass', mat: grassMaterials, iconClass: 'icon-grass' },
-  { key: 'dirt',  label: 'Dirt',  mat: matDirt,        iconClass: 'icon-dirt' },
-  { key: 'stone', label: 'Stone', mat: matStone,       iconClass: 'icon-stone' },
-  { key: 'sand',  label: 'Sand',  mat: matSand,        iconClass: 'icon-sand' },
-  { key: 'wood',  label: 'Wood',  mat: woodMaterials,  iconClass: 'icon-wood' },
-  { key: 'snow',  label: 'Snow',  mat: matSnow,        iconClass: 'icon-snow' },
-  { key: 'mud',   label: 'Mud',   mat: matMud,         iconClass: 'icon-mud' },
-  { key: 'moss',  label: 'Moss',  mat: matMoss,        iconClass: 'icon-moss' },
-  { key: 'tnt',   label: 'TNT',   mat: matTnt,         iconClass: 'icon-tnt' },
-  { key: 'obsidian', label: 'Obsidian', mat: matObsidian, iconClass: 'icon-obsidian' },
+  { key: 'grass', label: 'Grass', mat: grassMaterials, iconClass: 'icon-grass', hardness: 0.45 },
+  { key: 'dirt',  label: 'Dirt',  mat: matDirt,        iconClass: 'icon-dirt', hardness: 0.5 },
+  { key: 'stone', label: 'Stone', mat: matStone,       iconClass: 'icon-stone', hardness: 1.4 },
+  { key: 'sand',  label: 'Sand',  mat: matSand,        iconClass: 'icon-sand', hardness: 0.35 },
+  { key: 'wood',  label: 'Wood',  mat: woodMaterials,  iconClass: 'icon-wood', hardness: 0.85 },
+  { key: 'snow',  label: 'Snow',  mat: matSnow,        iconClass: 'icon-snow', hardness: 0.2 },
+  { key: 'mud',   label: 'Mud',   mat: matMud,         iconClass: 'icon-mud', hardness: 0.6 },
+  { key: 'moss',  label: 'Moss',  mat: matMoss,        iconClass: 'icon-moss', hardness: 0.55 },
+  { key: 'tnt',   label: 'TNT',   mat: matTnt,         iconClass: 'icon-tnt', hardness: 0.25 },
+  { key: 'obsidian', label: 'Obsidian', mat: matObsidian, iconClass: 'icon-obsidian', hardness: 3.5 },
 ];
 
 const blockMap = new Map(blockCatalog.map((entry) => [entry.key, entry]));
 
+function getBlockHardness(key: string | null | undefined): number {
+    if (!key) return 0.5;
+    const hardness = blockMap.get(key)?.hardness;
+    return Math.max(0, hardness ?? 0.5);
+}
+
 type TerrainPreset = 'normal' | 'flat' | 'chaos';
+
+type GameMode = 'creative' | 'survival';
 
 type WorldSettings = {
     terrain: TerrainPreset;
+    gameMode: GameMode;
     showHud: boolean;
 };
 
@@ -202,7 +212,7 @@ type WorldSeedOffsets = {
     terrainShiftZ: number;
 };
 
-const DEFAULT_WORLD_SETTINGS: WorldSettings = { terrain: 'normal', showHud: true };
+const DEFAULT_WORLD_SETTINGS: WorldSettings = { terrain: 'normal', gameMode: 'survival', showHud: true };
 const WORLD_META_LS_KEY = 'blockworld_worlds_meta_v1';
 const WORLD_EDIT_PREFIX = 'blockworld_world_edits_v1:';
 const WORLD_LAST_KEY = 'blockworld_last_world_v1';
@@ -210,6 +220,7 @@ const WORLD_LAST_KEY = 'blockworld_last_world_v1';
 function cloneSettings(settings?: Partial<WorldSettings>): WorldSettings {
     return {
         terrain: settings?.terrain ?? DEFAULT_WORLD_SETTINGS.terrain,
+        gameMode: settings?.gameMode === 'creative' ? 'creative' : 'survival',
         showHud: settings?.showHud ?? DEFAULT_WORLD_SETTINGS.showHud,
     };
 }
@@ -528,6 +539,9 @@ function setCurrentWorld(world: WorldProfile, options: { rebuild?: boolean } = {
         ...world,
         settings: cloneSettings(world.settings),
     };
+    cancelBlockBreaking();
+    setPlayerHealth(MAX_PLAYER_HEALTH);
+    markHeartsDirty();
     currentOffsets = computeSeedOffsets(currentWorld.seed);
     currentEdits = loadEditsForWorld(currentWorld.id);
     if (rebuild || objects.length === 0) {
@@ -559,6 +573,7 @@ const instructions = document.getElementById('instructions');
 const crosshair = document.getElementById('crosshair');
 // 検証用表示領域（HUD下部に追加）
 const hud = document.getElementById('hud');
+const heartsEl = document.getElementById('hearts');
 const hotbarEl = document.getElementById('hotbar');
 const inventoryEl = document.getElementById('inventory');
 const inventoryGrid = inventoryEl?.querySelector('.inventory-grid') as HTMLElement | null;
@@ -569,6 +584,7 @@ const worldListEl = document.getElementById('world-list');
 const worldNameInput = document.getElementById('world-name-input') as HTMLInputElement | null;
 const worldSeedInput = document.getElementById('world-seed-input') as HTMLInputElement | null;
 const terrainSelect = document.getElementById('world-terrain-select') as HTMLSelectElement | null;
+const gameModeSelect = document.getElementById('world-mode-select') as HTMLSelectElement | null;
 const hudToggle = document.getElementById('world-hud-toggle') as HTMLInputElement | null;
 const menuHint = document.getElementById('menu-hint');
 const validationEl = document.createElement('div');
@@ -582,6 +598,74 @@ let inventoryOpen = false;
 let pendingInventoryKey: string | null = null;
 let relockAfterInventory = false;
 let lastMenuReason: 'boot' | 'pause' | null = null;
+
+const MAX_PLAYER_HEALTH = 20;
+let currentPlayerHealth = MAX_PLAYER_HEALTH;
+let heartsDirty = true;
+
+function markHeartsDirty() {
+    heartsDirty = true;
+}
+
+function setPlayerHealth(value: number) {
+    const normalized = Math.max(0, Math.min(Math.floor(value), MAX_PLAYER_HEALTH));
+    if (normalized !== currentPlayerHealth) {
+        currentPlayerHealth = normalized;
+        markHeartsDirty();
+    }
+}
+
+function renderHeartsIfNeeded() {
+    if (!heartsDirty) {
+        return;
+    }
+    heartsDirty = false;
+    if (!heartsEl) {
+        return;
+    }
+    if (!currentWorld || currentWorld.settings.gameMode !== 'survival' || !currentWorld.settings.showHud) {
+        heartsEl.innerHTML = '';
+        heartsEl.style.display = 'none';
+        return;
+    }
+    const states = getHeartStates(currentPlayerHealth, MAX_PLAYER_HEALTH);
+    heartsEl.innerHTML = '';
+    heartsEl.style.display = 'flex';
+    for (const state of states) {
+        const span = document.createElement('span');
+        span.className = 'heart heart-' + state;
+        heartsEl.appendChild(span);
+    }
+}
+
+let breakingTarget: any = null;
+let breakingDuration = 0;
+let breakingElapsed = 0;
+let isLeftMouseDown = false;
+
+function cancelBlockBreaking() {
+    breakingTarget = null;
+    breakingDuration = 0;
+    breakingElapsed = 0;
+}
+
+function beginBlockBreaking(target: any) {
+    if (!currentWorld || currentWorld.settings.gameMode !== 'survival') {
+        removeBlock(target);
+        return;
+    }
+    const key = target?.userData?.blockKey as string | undefined;
+    const duration = Math.max(0.1, getBlockHardness(key));
+    if (duration <= 0.1) {
+        removeBlock(target);
+        cancelBlockBreaking();
+        return;
+    }
+    breakingTarget = target;
+    breakingDuration = duration;
+    breakingElapsed = 0;
+}
+
 
 function applyHudVisibility(show: boolean) {
     if (hud) {
@@ -597,6 +681,7 @@ function applyHudVisibility(show: boolean) {
             crosshair.style.display = 'none';
         }
     }
+    markHeartsDirty();
 }
 
 function menuIsOpen() {
@@ -659,6 +744,7 @@ function setMenuFormFromWorld(world: WorldProfile) {
     if (worldNameInput) worldNameInput.value = world.name;
     if (worldSeedInput) worldSeedInput.value = world.seed;
     if (terrainSelect) terrainSelect.value = world.settings.terrain;
+    if (gameModeSelect) gameModeSelect.value = world.settings.gameMode;
     if (hudToggle) hudToggle.checked = world.settings.showHud;
 }
 
@@ -677,6 +763,7 @@ function enterCreateMode() {
     if (worldNameInput) worldNameInput.value = `新しいワールド ${worlds.length + 1}`;
     if (worldSeedInput) worldSeedInput.value = generateSeedSuggestion();
     if (terrainSelect) terrainSelect.value = 'normal';
+    if (gameModeSelect) gameModeSelect.value = 'survival';
     if (hudToggle) hudToggle.checked = true;
     refreshWorldListUI();
     setMenuHint('作成するワールドの情報を設定してください。');
@@ -686,6 +773,7 @@ type WorldFormState = {
     name: string;
     seed: string;
     terrain: TerrainPreset;
+    gameMode: GameMode;
     showHud: boolean;
 };
 
@@ -694,10 +782,12 @@ function readWorldForm(): WorldFormState {
     const trimmedName = nameRaw.trim().substring(0, 32);
     const seedValue = worldSeedInput?.value ?? '';
     const terrainValue = terrainSelect?.value as TerrainPreset | undefined;
+    const gameModeValue = gameModeSelect?.value as GameMode | undefined;
     return {
         name: trimmedName.length > 0 ? trimmedName : '新しいワールド',
         seed: sanitizeSeed(seedValue),
         terrain: terrainValue === 'flat' || terrainValue === 'chaos' ? terrainValue : 'normal',
+        gameMode: gameModeValue === 'creative' ? 'creative' : 'survival',
         showHud: hudToggle ? hudToggle.checked : true,
     };
 }
@@ -708,12 +798,13 @@ function applyFormToExistingWorld(world: WorldProfile, form: WorldFormState) {
         name: form.name,
         seed: form.seed,
         updatedAt: Date.now(),
-        settings: cloneSettings({ terrain: form.terrain, showHud: form.showHud }),
+        settings: cloneSettings({ terrain: form.terrain, gameMode: form.gameMode, showHud: form.showHud }),
     };
     const needsRebuild = world.seed !== updated.seed || world.settings.terrain !== updated.settings.terrain;
     const hudChanged = world.settings.showHud !== updated.settings.showHud;
     const nameChanged = world.name !== updated.name;
-    return { updated, needsRebuild, hudChanged, nameChanged };
+    const modeChanged = world.settings.gameMode !== updated.settings.gameMode;
+    return { updated, needsRebuild, hudChanged, nameChanged, modeChanged };
 }
 
 function handleWorldApply(closeAfter: boolean) {
@@ -726,7 +817,7 @@ function handleWorldApply(closeAfter: boolean) {
             seed: form.seed,
             createdAt: timestamp,
             updatedAt: timestamp,
-            settings: cloneSettings({ terrain: form.terrain, showHud: form.showHud }),
+            settings: cloneSettings({ terrain: form.terrain, gameMode: form.gameMode, showHud: form.showHud }),
         };
         mergeWorldMeta(newWorld);
         selectedWorldId = newWorld.id;
@@ -744,7 +835,7 @@ function handleWorldApply(closeAfter: boolean) {
     if (!targetId) return;
     const existing = worlds.find((w) => w.id === targetId);
     if (!existing) return;
-    const { updated, needsRebuild, hudChanged, nameChanged } = applyFormToExistingWorld(existing, form);
+    const { updated, needsRebuild, hudChanged, nameChanged, modeChanged } = applyFormToExistingWorld(existing, form);
     const switchingWorld = !currentWorld || currentWorld.id !== updated.id;
     mergeWorldMeta(updated);
     selectedWorldId = updated.id;
@@ -756,7 +847,7 @@ function handleWorldApply(closeAfter: boolean) {
     setMenuFormFromWorld(updated);
     setMenuHint(closeAfter
         ? '設定を適用しました。'
-        : ((switchingWorld || needsRebuild || hudChanged || nameChanged) ? 'ワールド設定を保存しました。' : '変更はありませんでした。'));
+        : ((switchingWorld || needsRebuild || hudChanged || nameChanged || modeChanged) ? 'ワールド設定を保存しました。' : '変更はありませんでした。'));
     if (closeAfter) {
         closeMainMenu();
     }
@@ -1282,11 +1373,24 @@ const DOWN = new THREE.Vector3(0, -1, 0);
 const UP = new THREE.Vector3(0, 1, 0);
 
 document.addEventListener('mousedown', (event) => {
+    if (event.button === 0) {
+        isLeftMouseDown = true;
+    }
     if (inventoryOpen) {
         event.preventDefault();
+        if (event.button === 0) {
+            isLeftMouseDown = false;
+        }
+        cancelBlockBreaking();
         return;
     }
-    if (!controls.isLocked) return;
+    if (!controls.isLocked) {
+        if (event.button === 0) {
+            isLeftMouseDown = false;
+        }
+        cancelBlockBreaking();
+        return;
+    }
 
     raycaster.setFromCamera({ x: 0, y: 0 }, camera);
     const intersects = raycaster.intersectObjects(objects, false);
@@ -1311,13 +1415,30 @@ document.addEventListener('mousedown', (event) => {
                 if (key === 'tnt') {
                     igniteTnt(intersect.object);
                 } else {
-                    removeBlock(intersect.object);
+                    if (breakingTarget && breakingTarget !== intersect.object) {
+                        cancelBlockBreaking();
+                    }
+                    beginBlockBreaking(intersect.object);
                 }
             }
         }
     }
 });
 document.addEventListener('contextmenu', (event) => event.preventDefault());
+
+document.addEventListener('mouseup', (event) => {
+    if (event.button === 0) {
+        isLeftMouseDown = false;
+        cancelBlockBreaking();
+    }
+});
+
+document.addEventListener('pointerlockchange', () => {
+    if (!controls.isLocked) {
+        isLeftMouseDown = false;
+        cancelBlockBreaking();
+    }
+});
 
 
 // --- ウィンドウリサイズ対応 ---
@@ -1465,6 +1586,22 @@ function animate() {
         }
     }
 
+    if (breakingTarget) {
+        const inSurvival = currentWorld && currentWorld.settings.gameMode === 'survival';
+        if (!isLeftMouseDown || !controls.isLocked || !inSurvival) {
+            cancelBlockBreaking();
+        } else if (!objects.includes(breakingTarget)) {
+            cancelBlockBreaking();
+        } else {
+            breakingElapsed += delta;
+            if (breakingElapsed >= breakingDuration) {
+                const target = breakingTarget;
+                cancelBlockBreaking();
+                removeBlock(target);
+            }
+        }
+    }
+
     renderer.render(scene, camera);
 
     // HUD 更新
@@ -1475,6 +1612,7 @@ function animate() {
         fpsEl.textContent = formatFps(fps);
         coordsEl.textContent = formatCoords(p.x, p.y, p.z);
     }
+    renderHeartsIfNeeded();
     // 検証ログ
     if (fpsLogger && fpsLogger.isRunning()) {
         fpsLogger.tick(fps);
@@ -1624,3 +1762,5 @@ bootstrapWorldSystem();
     rightClick: () => document.dispatchEvent(new MouseEvent('mousedown', { button: 2 })),
     leftClick: () => document.dispatchEvent(new MouseEvent('mousedown', { button: 0 })),
 };
+
+

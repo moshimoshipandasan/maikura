@@ -18,7 +18,7 @@ canvas {
   display: flex;
   justify-content: center;
   align-items: center;
-  z-index: 10;
+  z-index: 9;
 }
 
 #instructions {
@@ -53,6 +53,59 @@ canvas {
   z-index: 9;
   user-select: none;
   pointer-events: none;
+}
+
+#hearts {
+  position: absolute;
+  bottom: 110px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  gap: 6px;
+  pointer-events: none;
+  z-index: 11;
+}
+
+#hearts .heart {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  font-size: 20px;
+  line-height: 20px;
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
+#hearts .heart::before,
+#hearts .heart::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#hearts .heart::before {
+  content: '♡';
+  color: rgba(255, 255, 255, 0.35);
+}
+
+#hearts .heart-full::after {
+  content: '♥';
+  color: #ff5252;
+}
+
+#hearts .heart-half::after {
+  content: '♥';
+  color: #ff5252;
+  -webkit-clip-path: inset(0 50% 0 0);
+  clip-path: inset(0 50% 0 0);
+}
+
+#hearts .heart-empty::after {
+  content: '';
 }
 
 #hotbar {
@@ -548,3 +601,5 @@ canvas {
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   }
 }
+
+

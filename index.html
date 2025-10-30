@@ -39,6 +39,13 @@
                             <option value="chaos">ダイナミック</option>
                         </select>
                     </div>
+                    <div class="menu-field">
+                        <label for="world-mode-select">ゲームモード</label>
+                        <select id="world-mode-select">
+                            <option value="survival">サバイバル</option>
+                            <option value="creative">クリエイティブ</option>
+                        </select>
+                    </div>
                     <div class="menu-field checkbox">
                         <label for="world-hud-toggle">
                             <input id="world-hud-toggle" type="checkbox" />
@@ -72,6 +79,7 @@
         <div id="fps">FPS: --</div>
         <div id="coords">X:0.0 Y:0.0 Z:0.0</div>
     </div>
+    <div id="hearts" aria-label="ライフ" role="presentation"></div>
     <div id="hotbar" aria-label="toolbox">
         <button class="slot" type="button" data-index="0">
             <span class="slot-index">1</span>
