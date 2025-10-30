@@ -177,6 +177,92 @@ const blockCatalog: BlockDef[] = [
 
 const blockMap = new Map(blockCatalog.map((entry) => [entry.key, entry]));
 
+type TerrainPreset = 'normal' | 'flat' | 'chaos';
+
+type WorldSettings = {
+    terrain: TerrainPreset;
+    showHud: boolean;
+};
+
+type WorldProfile = {
+    id: string;
+    name: string;
+    seed: string;
+    createdAt: number;
+    updatedAt: number;
+    settings: WorldSettings;
+};
+
+type WorldSeedOffsets = {
+    biomeShiftX: number;
+    biomeShiftZ: number;
+    moistureShiftX: number;
+    moistureShiftZ: number;
+    terrainShiftX: number;
+    terrainShiftZ: number;
+};
+
+const DEFAULT_WORLD_SETTINGS: WorldSettings = { terrain: 'normal', showHud: true };
+const WORLD_META_LS_KEY = 'blockworld_worlds_meta_v1';
+const WORLD_EDIT_PREFIX = 'blockworld_world_edits_v1:';
+const WORLD_LAST_KEY = 'blockworld_last_world_v1';
+
+function cloneSettings(settings?: Partial<WorldSettings>): WorldSettings {
+    return {
+        terrain: settings?.terrain ?? DEFAULT_WORLD_SETTINGS.terrain,
+        showHud: settings?.showHud ?? DEFAULT_WORLD_SETTINGS.showHud,
+    };
+}
+
+function generateWorldId() {
+    return `w-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function generateSeedSuggestion() {
+    const syllables = ['mori', 'saba', 'kaze', 'yuki', 'sora', 'umi', 'ishi', 'hana', 'asa', 'yoru'];
+    const pick = () => syllables[Math.floor(Math.random() * syllables.length)];
+    return `${pick()}-${pick()}-${Math.floor(Math.random() * 1000)}`;
+}
+
+function sanitizeSeed(value: string) {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : generateSeedSuggestion();
+}
+
+function hashString32(input: string, salt = 0): number {
+    let hash = 2166136261 ^ salt;
+    for (let i = 0; i < input.length; i++) {
+        hash ^= input.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+}
+
+function toUnitFloat(hash: number) {
+    return (hash & 0xffffffff) / 0xffffffff;
+}
+
+function computeSeedOffsets(seed: string): WorldSeedOffsets {
+    return {
+        biomeShiftX: toUnitFloat(hashString32(seed, 11)) * 480,
+        biomeShiftZ: toUnitFloat(hashString32(seed, 17)) * 480,
+        moistureShiftX: toUnitFloat(hashString32(seed, 23)) * 360,
+        moistureShiftZ: toUnitFloat(hashString32(seed, 29)) * 360,
+        terrainShiftX: toUnitFloat(hashString32(seed, 37)) * 520,
+        terrainShiftZ: toUnitFloat(hashString32(seed, 43)) * 520,
+    };
+}
+
+type EditMap = { [posKey: string]: string | null };
+
+let worlds: WorldProfile[] = [];
+let currentWorld: WorldProfile | null = null;
+let selectedWorldId: string | null = null;
+let creatingWorld = false;
+let currentOffsets: WorldSeedOffsets = computeSeedOffsets('default');
+let currentEdits: EditMap = {};
+let pendingMenuOpen = false;
+
 const DEFAULT_HOTBAR: string[] = ['grass', 'dirt', 'stone', 'sand', 'tnt'];
 let hotbarKeys: string[] = [...DEFAULT_HOTBAR];
 let selectedHotbarIndex = 2; // Stone
@@ -218,9 +304,10 @@ type BiomeProfile = {
     heightOffset: number;
 };
 
-function sampleBiome(x: number, z: number): BiomeProfile {
-    const heat = Math.sin(x / 24) + Math.cos(z / 31);
-    const moisture = Math.sin((x + z) / 37) + Math.cos((x - z) / 29);
+function sampleBiome(x: number, z: number, offsets: WorldSeedOffsets): BiomeProfile {
+    const heat = Math.sin((x + offsets.biomeShiftX) / 24) + Math.cos((z + offsets.biomeShiftZ) / 31);
+    const moisture = Math.sin(((x + offsets.moistureShiftX) + (z + offsets.moistureShiftZ)) / 37)
+        + Math.cos(((x + offsets.moistureShiftX) - (z + offsets.moistureShiftZ)) / 29);
     if (heat > 1.2) {
         return { top: 'sand', subsurface: 'sand', deep: 'stone', transitionDepth: 5, heightOffset: -1 };
     }
@@ -240,38 +327,230 @@ function materialFor(key: string) {
     return getBlockDef(key).mat;
 }
 
-loadHotbarFromStorage();
+function loadWorldMetaFromStorage(): WorldProfile[] {
+    try {
+        const raw = JSON.parse(localStorage.getItem(WORLD_META_LS_KEY) ?? '[]');
+        if (!Array.isArray(raw)) return [];
+        const list: WorldProfile[] = [];
+        for (const entry of raw) {
+            if (!entry || typeof entry !== 'object') continue;
+            const id = typeof entry.id === 'string' ? entry.id : generateWorldId();
+            const name = typeof entry.name === 'string' && entry.name.trim() ? entry.name.trim() : `ワールド-${list.length + 1}`;
+            const seed = typeof entry.seed === 'string' ? sanitizeSeed(entry.seed) : generateSeedSuggestion();
+            const createdAt = typeof entry.createdAt === 'number' ? entry.createdAt : Date.now();
+            const updatedAt = typeof entry.updatedAt === 'number' ? entry.updatedAt : createdAt;
+            const settings = cloneSettings(entry.settings);
+            list.push({ id, name, seed, createdAt, updatedAt, settings });
+        }
+        return list;
+    } catch {
+        return [];
+    }
+}
 
-for (let x = -worldSize / 2; x < worldSize / 2; x++) {
-    for (let z = -worldSize / 2; z < worldSize / 2; z++) {
-        const biome = sampleBiome(x, z);
-        const terrainBase = Math.cos(x / 8) * 3.5 + Math.sin(z / 8) * 3.5;
-        const height = Math.max(2, Math.floor(terrainBase + 8 + biome.heightOffset));
-        for (let y = 0; y < height; y++) {
-            const layerFromTop = (height - 1) - y;
-            let blockKey: string;
-            if (y === height - 1) {
-                blockKey = biome.top;
-            } else if (layerFromTop < biome.transitionDepth) {
-                blockKey = biome.subsurface;
-            } else {
-                blockKey = biome.deep;
+function saveWorldMetaToStorage(list: WorldProfile[]): void {
+    try {
+        localStorage.setItem(WORLD_META_LS_KEY, JSON.stringify(list));
+    } catch {
+        /* ignore */
+    }
+}
+
+function ensureWorldCatalog(): WorldProfile[] {
+    const existing = loadWorldMetaFromStorage();
+    if (existing.length > 0) {
+        return existing;
+    }
+    const timestamp = Date.now();
+    const starter: WorldProfile = {
+        id: generateWorldId(),
+        name: 'プレイグラウンド',
+        seed: generateSeedSuggestion(),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        settings: cloneSettings(),
+    };
+    saveWorldMetaToStorage([starter]);
+    return [starter];
+}
+
+function mergeWorldMeta(updated: WorldProfile) {
+    const index = worlds.findIndex((w) => w.id === updated.id);
+    if (index >= 0) {
+        worlds[index] = { ...updated };
+    } else {
+        worlds.push({ ...updated });
+    }
+    saveWorldMetaToStorage(worlds);
+}
+
+function worldEditsKey(worldId: string): string {
+    return `${WORLD_EDIT_PREFIX}${worldId}`;
+}
+
+function loadEditsForWorld(worldId: string): EditMap {
+    try {
+        const raw = localStorage.getItem(worldEditsKey(worldId));
+        if (!raw) {
+            return {};
+        }
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') {
+            return {};
+        }
+        const result: EditMap = {};
+        const entries = Object.entries(parsed as Record<string, unknown>);
+        for (const [pos, value] of entries) {
+            if (value === null) {
+                result[pos] = null;
+            } else if (typeof value === 'string') {
+                result[pos] = value;
             }
-            if (y === 0) {
-                blockKey = 'obsidian';
+        }
+        return result;
+    } catch {
+        return {};
+    }
+}
+
+function saveEditsForWorld(worldId: string, map: EditMap): void {
+    try {
+        localStorage.setItem(worldEditsKey(worldId), JSON.stringify(map));
+    } catch {
+        /* ignore */
+    }
+}
+
+function clearEditsForWorld(worldId: string): void {
+    try {
+        localStorage.removeItem(worldEditsKey(worldId));
+    } catch {
+        /* ignore */
+    }
+}
+
+function clearSceneTerrain(): void {
+    for (const obj of objects) {
+        scene.remove(obj);
+    }
+    objects.length = 0;
+}
+
+type TerrainParams = {
+    amplitude: number;
+    period: number;
+    baseHeight: number;
+};
+
+function resolveTerrainParams(preset: TerrainPreset): TerrainParams {
+    switch (preset) {
+        case 'flat':
+            return { amplitude: 2.0, period: 14, baseHeight: 7.5 };
+        case 'chaos':
+            return { amplitude: 6.0, period: 6, baseHeight: 8.5 };
+        default:
+            return { amplitude: 3.5, period: 8, baseHeight: 8.0 };
+    }
+}
+
+function rebuildWorldTerrain(world: WorldProfile): void {
+    clearSceneTerrain();
+    currentOffsets = computeSeedOffsets(world.seed);
+    const params = resolveTerrainParams(world.settings.terrain);
+    for (let x = -worldSize / 2; x < worldSize / 2; x++) {
+        for (let z = -worldSize / 2; z < worldSize / 2; z++) {
+            const biome = sampleBiome(x, z, currentOffsets);
+            const waveX = Math.cos((x + currentOffsets.terrainShiftX) / params.period) * params.amplitude;
+            const waveZ = Math.sin((z + currentOffsets.terrainShiftZ) / params.period) * (params.amplitude * 0.82);
+            const wobble = Math.sin((x + z + currentOffsets.terrainShiftX * 0.35) / (params.period * 0.9)) * (params.amplitude * 0.35);
+            const height = Math.max(2, Math.floor(params.baseHeight + biome.heightOffset + waveX + waveZ + wobble));
+            for (let y = 0; y < height; y++) {
+                const layerFromTop = (height - 1) - y;
+                let blockKey: string;
+                if (y === height - 1) {
+                    blockKey = biome.top;
+                } else if (layerFromTop < biome.transitionDepth) {
+                    blockKey = biome.subsurface;
+                } else {
+                    blockKey = biome.deep;
+                }
+                if (y === 0) {
+                    blockKey = 'obsidian';
+                }
+                const material = materialFor(blockKey);
+                const cube = new THREE.Mesh(cubeGeometry, material);
+                cube.position.set(x, y + 0.5, z);
+                cube.castShadow = false;
+                cube.receiveShadow = true;
+                cube.userData.blockKey = blockKey;
+                scene.add(cube);
+                objects.push(cube);
             }
-            const material = materialFor(blockKey);
+        }
+    }
+}
+
+function applyEditsToScene(map: EditMap): void {
+    const eps = 1e-6;
+    const findAt = (x: number, y: number, z: number) => objects.find((o: any) => Math.abs(o.position.x - x) < eps && Math.abs(o.position.y - y) < eps && Math.abs(o.position.z - z) < eps);
+    for (const [key, value] of Object.entries(map)) {
+        const [sx, sy, sz] = key.split(',').map(Number);
+        const target = findAt(sx, sy, sz);
+        if (value === null) {
+            if (target) {
+                scene.remove(target);
+                const idx = objects.indexOf(target);
+                if (idx >= 0) {
+                    objects.splice(idx, 1);
+                }
+            }
+            continue;
+        }
+        const material = materialFor(value);
+        if (target) {
+            target.material = material;
+            target.userData.blockKey = value;
+        } else {
             const cube = new THREE.Mesh(cubeGeometry, material);
-            cube.position.set(x, y + 0.5, z);
-            cube.castShadow = false;
+            cube.position.set(sx, sy, sz);
+            cube.castShadow = true;
             cube.receiveShadow = true;
-            cube.userData.blockKey = blockKey;
+            cube.userData.blockKey = value;
             scene.add(cube);
             objects.push(cube);
         }
     }
 }
 
+function setCurrentWorld(world: WorldProfile, options: { rebuild?: boolean } = {}): void {
+    const rebuild = options.rebuild ?? true;
+    currentWorld = {
+        ...world,
+        settings: cloneSettings(world.settings),
+    };
+    currentOffsets = computeSeedOffsets(currentWorld.seed);
+    currentEdits = loadEditsForWorld(currentWorld.id);
+    if (rebuild || objects.length === 0) {
+        rebuildWorldTerrain(currentWorld);
+    }
+    applyEditsToScene(currentEdits);
+    currentWorld.updatedAt = Date.now();
+    mergeWorldMeta(currentWorld);
+    localStorage.setItem(WORLD_LAST_KEY, currentWorld.id);
+    applyHudVisibility(currentWorld.settings.showHud);
+}
+
+function deleteWorldMeta(worldId: string): void {
+    clearEditsForWorld(worldId);
+    worlds = worlds.filter((w) => w.id !== worldId);
+    saveWorldMetaToStorage(worlds);
+    if (localStorage.getItem(WORLD_LAST_KEY) === worldId) {
+        localStorage.removeItem(WORLD_LAST_KEY);
+    }
+}
+
+loadHotbarFromStorage();
+// ワールドの生成はメニュー初期化時に行う。
 
 // --- プレイヤーコントロールと物理演算 ---
 const controls = new THREE.PointerLockControls(camera, document.body);
@@ -285,6 +564,13 @@ const inventoryEl = document.getElementById('inventory');
 const inventoryGrid = inventoryEl?.querySelector('.inventory-grid') as HTMLElement | null;
 const inventoryCloseBtn = inventoryEl?.querySelector('[data-action="close"]') as HTMLButtonElement | null;
 const inventoryHint = inventoryEl?.querySelector('.inventory-hint') as HTMLElement | null;
+const mainMenu = document.getElementById('main-menu');
+const worldListEl = document.getElementById('world-list');
+const worldNameInput = document.getElementById('world-name-input') as HTMLInputElement | null;
+const worldSeedInput = document.getElementById('world-seed-input') as HTMLInputElement | null;
+const terrainSelect = document.getElementById('world-terrain-select') as HTMLSelectElement | null;
+const hudToggle = document.getElementById('world-hud-toggle') as HTMLInputElement | null;
+const menuHint = document.getElementById('menu-hint');
 const validationEl = document.createElement('div');
 validationEl.id = 'validation';
 validationEl.style.marginTop = '6px';
@@ -295,14 +581,336 @@ hud?.appendChild(validationEl);
 let inventoryOpen = false;
 let pendingInventoryKey: string | null = null;
 let relockAfterInventory = false;
+let lastMenuReason: 'boot' | 'pause' | null = null;
 
-instructions?.addEventListener('click', () => { controls.lock(); }, false);
-controls.addEventListener('lock', () => {
+function applyHudVisibility(show: boolean) {
+    if (hud) {
+        hud.style.display = show ? 'block' : 'none';
+    }
+    if (hotbarEl) {
+        hotbarEl.style.display = show ? 'flex' : 'none';
+    }
+    if (crosshair) {
+        if (show && controls.isLocked && !inventoryOpen) {
+            crosshair.style.display = 'block';
+        } else {
+            crosshair.style.display = 'none';
+        }
+    }
+}
+
+function menuIsOpen() {
+    return Boolean(mainMenu?.classList.contains('open'));
+}
+
+function setMenuHint(text: string) {
+    if (menuHint) {
+        menuHint.textContent = text;
+    }
+}
+
+function formatWorldMetaLine(world: WorldProfile) {
+    const date = new Date(world.updatedAt);
+    if (Number.isNaN(date.getTime())) {
+        return `シード ${world.seed}`;
+    }
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    const hh = String(date.getHours()).padStart(2, '0');
+    const mi = String(date.getMinutes()).padStart(2, '0');
+    return `更新 ${yyyy}/${mm}/${dd} ${hh}:${mi} ｜ シード ${world.seed}`;
+}
+
+function refreshWorldListUI() {
+    if (!worldListEl) return;
+    worldListEl.innerHTML = '';
+    const sorted = [...worlds].sort((a, b) => b.updatedAt - a.updatedAt);
+    for (const world of sorted) {
+        const li = document.createElement('li');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'world-item';
+        btn.dataset.id = world.id;
+        btn.setAttribute('role', 'option');
+        const active = !creatingWorld && selectedWorldId === world.id;
+        if (active) {
+            btn.classList.add('active');
+            btn.setAttribute('aria-selected', 'true');
+        } else {
+            btn.setAttribute('aria-selected', 'false');
+        }
+        const nameEl = document.createElement('strong');
+        nameEl.textContent = world.name;
+        const metaEl = document.createElement('span');
+        metaEl.textContent = formatWorldMetaLine(world);
+        btn.appendChild(nameEl);
+        btn.appendChild(metaEl);
+        btn.addEventListener('click', () => {
+            selectWorld(world.id);
+        });
+        li.appendChild(btn);
+        worldListEl.appendChild(li);
+    }
+}
+
+function setMenuFormFromWorld(world: WorldProfile) {
+    creatingWorld = false;
+    if (worldNameInput) worldNameInput.value = world.name;
+    if (worldSeedInput) worldSeedInput.value = world.seed;
+    if (terrainSelect) terrainSelect.value = world.settings.terrain;
+    if (hudToggle) hudToggle.checked = world.settings.showHud;
+}
+
+function selectWorld(worldId: string) {
+    const target = worlds.find((w) => w.id === worldId);
+    if (!target) return;
+    selectedWorldId = worldId;
+    setMenuFormFromWorld(target);
+    refreshWorldListUI();
+    setMenuHint('設定を調整して「変更を保存」か「プレイ開始」を押してください。');
+}
+
+function enterCreateMode() {
+    creatingWorld = true;
+    selectedWorldId = null;
+    if (worldNameInput) worldNameInput.value = `新しいワールド ${worlds.length + 1}`;
+    if (worldSeedInput) worldSeedInput.value = generateSeedSuggestion();
+    if (terrainSelect) terrainSelect.value = 'normal';
+    if (hudToggle) hudToggle.checked = true;
+    refreshWorldListUI();
+    setMenuHint('作成するワールドの情報を設定してください。');
+}
+
+type WorldFormState = {
+    name: string;
+    seed: string;
+    terrain: TerrainPreset;
+    showHud: boolean;
+};
+
+function readWorldForm(): WorldFormState {
+    const nameRaw = worldNameInput?.value ?? '';
+    const trimmedName = nameRaw.trim().substring(0, 32);
+    const seedValue = worldSeedInput?.value ?? '';
+    const terrainValue = terrainSelect?.value as TerrainPreset | undefined;
+    return {
+        name: trimmedName.length > 0 ? trimmedName : '新しいワールド',
+        seed: sanitizeSeed(seedValue),
+        terrain: terrainValue === 'flat' || terrainValue === 'chaos' ? terrainValue : 'normal',
+        showHud: hudToggle ? hudToggle.checked : true,
+    };
+}
+
+function applyFormToExistingWorld(world: WorldProfile, form: WorldFormState) {
+    const updated: WorldProfile = {
+        ...world,
+        name: form.name,
+        seed: form.seed,
+        updatedAt: Date.now(),
+        settings: cloneSettings({ terrain: form.terrain, showHud: form.showHud }),
+    };
+    const needsRebuild = world.seed !== updated.seed || world.settings.terrain !== updated.settings.terrain;
+    const hudChanged = world.settings.showHud !== updated.settings.showHud;
+    const nameChanged = world.name !== updated.name;
+    return { updated, needsRebuild, hudChanged, nameChanged };
+}
+
+function handleWorldApply(closeAfter: boolean) {
+    const form = readWorldForm();
+    if (creatingWorld) {
+        const timestamp = Date.now();
+        const newWorld: WorldProfile = {
+            id: generateWorldId(),
+            name: form.name,
+            seed: form.seed,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            settings: cloneSettings({ terrain: form.terrain, showHud: form.showHud }),
+        };
+        mergeWorldMeta(newWorld);
+        selectedWorldId = newWorld.id;
+        creatingWorld = false;
+        setCurrentWorld(newWorld, { rebuild: true });
+        refreshWorldListUI();
+        setMenuFormFromWorld(newWorld);
+        setMenuHint(closeAfter ? '新しいワールドでプレイを開始します。' : '新しいワールドを作成しました。');
+        if (closeAfter) {
+            closeMainMenu();
+        }
+        return;
+    }
+    const targetId = selectedWorldId ?? currentWorld?.id;
+    if (!targetId) return;
+    const existing = worlds.find((w) => w.id === targetId);
+    if (!existing) return;
+    const { updated, needsRebuild, hudChanged, nameChanged } = applyFormToExistingWorld(existing, form);
+    const switchingWorld = !currentWorld || currentWorld.id !== updated.id;
+    mergeWorldMeta(updated);
+    selectedWorldId = updated.id;
+    setCurrentWorld(updated, { rebuild: switchingWorld || needsRebuild });
+    if (!switchingWorld && !needsRebuild && hudChanged) {
+        applyHudVisibility(updated.settings.showHud);
+    }
+    refreshWorldListUI();
+    setMenuFormFromWorld(updated);
+    setMenuHint(closeAfter
+        ? '設定を適用しました。'
+        : ((switchingWorld || needsRebuild || hudChanged || nameChanged) ? 'ワールド設定を保存しました。' : '変更はありませんでした。'));
+    if (closeAfter) {
+        closeMainMenu();
+    }
+}
+
+function handleWorldReset() {
+    const targetId = selectedWorldId ?? currentWorld?.id;
+    if (!targetId) return;
+    const world = worlds.find((w) => w.id === targetId);
+    if (!world) return;
+    if (!window.confirm(`${world.name} の編集履歴をすべて削除しますか？`)) {
+        return;
+    }
+    clearEditsForWorld(targetId);
+    const updatedWorld: WorldProfile = {
+        ...world,
+        updatedAt: Date.now(),
+        settings: cloneSettings(world.settings),
+    };
+    mergeWorldMeta(updatedWorld);
+    if (currentWorld && currentWorld.id === targetId) {
+        currentEdits = {};
+        setCurrentWorld(updatedWorld, { rebuild: true });
+    } else {
+        setMenuFormFromWorld(updatedWorld);
+    }
+    refreshWorldListUI();
+    setMenuHint('ワールドを初期化しました。');
+}
+
+function handleWorldDelete() {
+    const targetId = selectedWorldId ?? currentWorld?.id;
+    if (!targetId) return;
+    if (worlds.length <= 1) {
+        setMenuHint('最後のワールドは削除できません。');
+        return;
+    }
+    const world = worlds.find((w) => w.id === targetId);
+    if (!world) return;
+    if (!window.confirm(`${world.name} を削除しますか？`)) {
+        return;
+    }
+    deleteWorldMeta(world.id);
+    if (worlds.length === 0) {
+        worlds = ensureWorldCatalog();
+    }
+    const fallback = worlds[0];
+    selectedWorldId = fallback?.id ?? null;
+    if (currentWorld && currentWorld.id === world.id) {
+        if (fallback) {
+            setCurrentWorld(fallback, { rebuild: true });
+        } else {
+            creatingWorld = true;
+        }
+    }
+    if (fallback) {
+        setMenuFormFromWorld(fallback);
+    } else {
+        enterCreateMode();
+    }
+    refreshWorldListUI();
+    setMenuHint('ワールドを削除しました。');
+}
+
+function openMainMenu(reason: 'boot' | 'pause') {
+    if (!mainMenu) return;
+    lastMenuReason = reason;
+    mainMenu.classList.add('open');
+    mainMenu.setAttribute('aria-hidden', 'false');
     if (blocker) {
         blocker.style.display = 'none';
     }
     if (crosshair) {
-        crosshair.style.display = inventoryOpen ? 'none' : 'block';
+        crosshair.style.display = 'none';
+    }
+    refreshWorldListUI();
+    if (!creatingWorld && selectedWorldId) {
+        const selected = worlds.find((w) => w.id === selectedWorldId);
+        if (selected) {
+            setMenuFormFromWorld(selected);
+        }
+    } else if (creatingWorld) {
+        setMenuHint('作成するワールドの情報を設定してください。');
+    }
+}
+
+function closeMainMenu() {
+    if (!mainMenu) return;
+    mainMenu.classList.remove('open');
+    mainMenu.setAttribute('aria-hidden', 'true');
+    lastMenuReason = null;
+    if (!controls.isLocked && !inventoryOpen) {
+        if (blocker) {
+            blocker.style.display = 'flex';
+        }
+    }
+}
+
+function bootstrapWorldSystem() {
+    worlds = ensureWorldCatalog();
+    const lastId = localStorage.getItem(WORLD_LAST_KEY);
+    const initial = (lastId && worlds.find((w) => w.id === lastId)) ?? worlds[0];
+    if (initial) {
+        selectedWorldId = initial.id;
+        setCurrentWorld(initial, { rebuild: true });
+        setMenuFormFromWorld(initial);
+        refreshWorldListUI();
+        setMenuHint('ワールドを選択しました。プレイ準備が整っています。');
+    } else {
+        enterCreateMode();
+        setMenuHint('最初のワールドを作成しましょう。');
+    }
+    openMainMenu('boot');
+}
+
+mainMenu?.addEventListener('click', (event) => {
+    const target = (event.target as HTMLElement | null)?.closest('[data-action]') as HTMLElement | null;
+    if (!target) return;
+    const action = target.dataset.action;
+    switch (action) {
+        case 'menu-close':
+            closeMainMenu();
+            break;
+        case 'world-create':
+            enterCreateMode();
+            break;
+        case 'world-play':
+            handleWorldApply(true);
+            break;
+        case 'world-apply':
+            handleWorldApply(false);
+            break;
+        case 'world-reset':
+            handleWorldReset();
+            break;
+        case 'world-delete':
+            handleWorldDelete();
+            break;
+        default:
+            break;
+    }
+});
+
+instructions?.addEventListener('click', () => { controls.lock(); }, false);
+controls.addEventListener('lock', () => {
+    pendingMenuOpen = false;
+    if (menuIsOpen()) {
+        closeMainMenu();
+    }
+    if (blocker) {
+        blocker.style.display = 'none';
+    }
+    if (crosshair) {
+        crosshair.style.display = (!inventoryOpen && (currentWorld?.settings.showHud ?? true)) ? 'block' : 'none';
     }
     if (inventoryOpen) {
         applyInventoryVisibility();
@@ -317,6 +925,20 @@ controls.addEventListener('lock', () => {
     }
 });
 controls.addEventListener('unlock', () => {
+    if (pendingMenuOpen) {
+        pendingMenuOpen = false;
+        openMainMenu('pause');
+        return;
+    }
+    if (menuIsOpen()) {
+        if (blocker) {
+            blocker.style.display = 'none';
+        }
+        if (crosshair) {
+            crosshair.style.display = 'none';
+        }
+        return;
+    }
     if (inventoryOpen) {
         if (blocker) {
             blocker.style.display = 'none';
@@ -380,7 +1002,8 @@ function applyInventoryVisibility() {
     }
     document.body.classList.toggle('inventory-open', inventoryOpen);
     if (crosshair) {
-        crosshair.style.display = inventoryOpen ? 'none' : (controls.isLocked ? 'block' : 'none');
+        const allowCrosshair = !inventoryOpen && (currentWorld?.settings.showHud ?? true) && controls.isLocked && !menuIsOpen();
+        crosshair.style.display = allowCrosshair ? 'block' : 'none';
     }
     if (blocker && inventoryOpen) {
         blocker.style.display = 'none';
@@ -456,9 +1079,52 @@ inventoryEl?.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+    if (event.code === 'Escape') {
+        if (inventoryOpen) {
+            return;
+        }
+        if (menuIsOpen()) {
+            event.preventDefault();
+            closeMainMenu();
+            return;
+        }
+        if (controls.isLocked) {
+            pendingMenuOpen = true;
+            event.preventDefault();
+            controls.unlock();
+        } else {
+            event.preventDefault();
+            openMainMenu('pause');
+        }
+        return;
+    }
+    if (event.code === 'KeyM') {
+        if (inventoryOpen) {
+            return;
+        }
+        if (menuIsOpen()) {
+            event.preventDefault();
+            closeMainMenu();
+            return;
+        }
+        if (controls.isLocked) {
+            pendingMenuOpen = true;
+            event.preventDefault();
+            controls.unlock();
+        } else {
+            event.preventDefault();
+            openMainMenu('pause');
+        }
+    }
+});
+
+document.addEventListener('keydown', (event) => {
     if (event.code === 'KeyE') {
         event.preventDefault();
         if (inventoryOpen) { closeInventory(); } else { openInventory(); }
+        return;
+    }
+    if (menuIsOpen()) {
         return;
     }
     if (inventoryOpen) {
@@ -484,6 +1150,7 @@ document.addEventListener('keydown', (event) => {
 });
 
 document.addEventListener('keyup', (event) => {
+    if (menuIsOpen()) return;
     if (inventoryOpen) return;
     switch (event.code) {
         case 'KeyW': moveState.forward = false; break;
@@ -931,40 +1598,20 @@ function setPendingInventoryKey(key: string | null) {
     reflectInventorySelection();
 }
 
-// ---- 簡易永続化（localStorage） ----
-type EditMap = { [posKey: string]: string | null };
-function keyFromPos(p: any) { return `${Math.round(p.x*1000)/1000},${Math.round(p.y*1000)/1000},${Math.round(p.z*1000)/1000}`; }
-const LS_KEY = 'blockworld_edits_v1';
-function loadEdits(): EditMap { try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch { return {}; } }
-function saveEdits(map: EditMap) { try { localStorage.setItem(LS_KEY, JSON.stringify(map)); } catch { /* ignore */ } }
-function persistEdit(pos: any, type: string | null) { const map = loadEdits(); map[keyFromPos(pos)] = type; saveEdits(map); }
-function applyEdits() {
-    const map = loadEdits();
-    const eps = 1e-6;
-    const findAt = (x:number,y:number,z:number) => objects.find((o:any) => Math.abs(o.position.x - x)<eps && Math.abs(o.position.y - y)<eps && Math.abs(o.position.z - z)<eps);
-    for (const [k, v] of Object.entries(map)) {
-        const [x,y,z] = k.split(',').map(Number);
-        const target = findAt(x,y,z);
-        if (v === null) {
-            if (target) { scene.remove(target); objects.splice(objects.indexOf(target),1); }
-        } else {
-            if (!target) {
-                const material = materialFor(v);
-                const cube = new THREE.Mesh(cubeGeometry, material);
-                cube.position.set(x,y,z);
-                cube.castShadow = true; cube.receiveShadow = true;
-                cube.userData.blockKey = v;
-                scene.add(cube); objects.push(cube);
-            } else {
-                target.material = materialFor(v);
-                target.userData.blockKey = v;
-            }
-        }
-    }
+function keyFromPos(p: any) {
+    return `${Math.round(p.x * 1000) / 1000},${Math.round(p.y * 1000) / 1000},${Math.round(p.z * 1000) / 1000}`;
 }
 
-// 初期ロード時に反映
-applyEdits();
+function persistEdit(pos: any, type: string | null) {
+    if (!currentWorld) return;
+    const key = keyFromPos(pos);
+    currentEdits[key] = type;
+    saveEditsForWorld(currentWorld.id, currentEdits);
+    currentWorld.updatedAt = Date.now();
+    mergeWorldMeta(currentWorld);
+}
+
+bootstrapWorldSystem();
 
 // ---- E2E helpers (for Playwright) ----
 // Expose minimal debug API to drive smoke interactions in tests.

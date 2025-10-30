@@ -11,6 +11,51 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
 </head>
 <body>
+    <div id="main-menu" class="menu-overlay" aria-hidden="true">
+        <div class="menu-panel" role="dialog" aria-modal="true" aria-labelledby="menu-title">
+            <header class="menu-header">
+                <h1 id="menu-title">ブロックワールド</h1>
+                <button type="button" class="menu-close" data-action="menu-close" aria-label="閉じる">×</button>
+            </header>
+            <div class="menu-body">
+                <nav class="menu-worlds" aria-label="ワールド一覧">
+                    <ul id="world-list" class="world-list" role="listbox" aria-label="ワールドを選択"></ul>
+                    <button type="button" class="menu-button accent" data-action="world-create">新しいワールド</button>
+                </nav>
+                <section class="menu-detail">
+                    <div class="menu-field">
+                        <label for="world-name-input">ワールド名</label>
+                        <input id="world-name-input" type="text" maxlength="32" autocomplete="off" />
+                    </div>
+                    <div class="menu-field">
+                        <label for="world-seed-input">シード</label>
+                        <input id="world-seed-input" type="text" maxlength="48" autocomplete="off" placeholder="例: cozy-archipelago" />
+                    </div>
+                    <div class="menu-field">
+                        <label for="world-terrain-select">地形タイプ</label>
+                        <select id="world-terrain-select">
+                            <option value="normal">ノーマル</option>
+                            <option value="flat">フラット</option>
+                            <option value="chaos">ダイナミック</option>
+                        </select>
+                    </div>
+                    <div class="menu-field checkbox">
+                        <label for="world-hud-toggle">
+                            <input id="world-hud-toggle" type="checkbox" />
+                            HUD を表示
+                        </label>
+                    </div>
+                    <div class="menu-actions">
+                        <button type="button" class="menu-button primary" data-action="world-play">プレイ開始</button>
+                        <button type="button" class="menu-button" data-action="world-apply">変更を保存</button>
+                        <button type="button" class="menu-button" data-action="world-reset">ワールド初期化</button>
+                        <button type="button" class="menu-button danger" data-action="world-delete">ワールド削除</button>
+                    </div>
+                    <p id="menu-hint" class="menu-hint">ワールドを選択してください。</p>
+                </section>
+            </div>
+        </div>
+    </div>
     <div id="blocker">
         <div id="instructions">
             <span style="font-size:36px">クリックしてプレイ</span>
