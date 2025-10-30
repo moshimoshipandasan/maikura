@@ -118,11 +118,30 @@ function snowTex(){ return noiseTex([225, 230, 240],[255,255,255],32,32,0.65,1.0
 function mudTex(){ return noiseTex([62,45,32],[90,65,48],32,32,0.55,1.18,0.9); }
 function mossTex(){ return noiseTex([35,90,45],[70,150,80],32,32,0.45,1.2,1.05); }
 function obsidianTex(){ return noiseTex([25, 20, 45],[55, 40, 85],32,32,0.45,1.25,1.2); }
+function tntTex(lit = false) {
+    const c = makeCanvas(32,32); const ctx = c.getContext('2d')!;
+    ctx.fillStyle = lit ? '#ff5a3c' : '#c4281c';
+    ctx.fillRect(0,0,32,32);
+    ctx.fillStyle = lit ? '#fff4d0' : '#f8f8f8';
+    for(let x=0;x<32;x+=6){ ctx.fillRect(x,0,3,32); }
+    ctx.fillStyle = lit ? '#311a0f' : '#22140c';
+    ctx.fillRect(0,12,32,8);
+    ctx.fillStyle = lit ? '#fff4d0' : '#ffffff';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('TNT', 16, 16);
+    const tex = new THREE.CanvasTexture(c);
+    tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestMipMapNearestFilter; tex.encoding = THREE.sRGBEncoding;
+    return tex;
+}
 
 const matSnow = new THREE.MeshLambertMaterial({ map: snowTex() });
 const matMud  = new THREE.MeshLambertMaterial({ map: mudTex() });
 const matMoss = new THREE.MeshLambertMaterial({ map: mossTex() });
 const matObsidian = new THREE.MeshLambertMaterial({ map: obsidianTex() });
+const matTnt = new THREE.MeshLambertMaterial({ map: tntTex(false), emissive: new THREE.Color(0x2d0500), emissiveIntensity: 0.1 });
+const matTntLit = new THREE.MeshLambertMaterial({ map: tntTex(true), emissive: new THREE.Color(0xff5a20), emissiveIntensity: 0.6 });
 
 // ブロック種別（グラスは面ごとに異素材、他は単一）
 const grassMaterials = [
@@ -152,12 +171,13 @@ const blockCatalog: BlockDef[] = [
   { key: 'snow',  label: 'Snow',  mat: matSnow,        iconClass: 'icon-snow' },
   { key: 'mud',   label: 'Mud',   mat: matMud,         iconClass: 'icon-mud' },
   { key: 'moss',  label: 'Moss',  mat: matMoss,        iconClass: 'icon-moss' },
+  { key: 'tnt',   label: 'TNT',   mat: matTnt,         iconClass: 'icon-tnt' },
   { key: 'obsidian', label: 'Obsidian', mat: matObsidian, iconClass: 'icon-obsidian' },
 ];
 
 const blockMap = new Map(blockCatalog.map((entry) => [entry.key, entry]));
 
-const DEFAULT_HOTBAR: string[] = ['grass', 'dirt', 'stone', 'sand', 'wood'];
+const DEFAULT_HOTBAR: string[] = ['grass', 'dirt', 'stone', 'sand', 'tnt'];
 let hotbarKeys: string[] = [...DEFAULT_HOTBAR];
 let selectedHotbarIndex = 2; // Stone
 const HOTBAR_LS_KEY = 'blockworld_hotbar_v1';
@@ -483,6 +503,110 @@ const rollOverMesh = new THREE.Mesh(
 );
 scene.add(rollOverMesh);
 
+const TNT_FUSE_MS = 2800;
+const TNT_CHAIN_FUSE_MS = 1200;
+const TNT_EXPLOSION_RADIUS = 3.5;
+const activeTntFuses = new Map<any, number>();
+const activeTntBlinkers = new Map<any, number>();
+
+function isTntBlock(obj: any): boolean {
+    return Boolean(obj?.userData?.blockKey === 'tnt');
+}
+
+function cancelTntTimers(target: any) {
+    const fuse = activeTntFuses.get(target);
+    if (fuse !== undefined) {
+        window.clearTimeout(fuse);
+        activeTntFuses.delete(target);
+    }
+    const blink = activeTntBlinkers.get(target);
+    if (blink !== undefined) {
+        window.clearInterval(blink);
+        activeTntBlinkers.delete(target);
+    }
+    if (isTntBlock(target)) {
+        target.material = matTnt;
+    }
+}
+
+function removeBlock(mesh: any) {
+    if (!mesh) return;
+    cancelTntTimers(mesh);
+    persistEdit(mesh.position, null);
+    scene.remove(mesh);
+    const idx = objects.indexOf(mesh);
+    if (idx >= 0) objects.splice(idx, 1);
+}
+
+function igniteTnt(target: any, fuseMs = TNT_FUSE_MS) {
+    if (!isTntBlock(target)) return;
+    if (activeTntFuses.has(target)) return;
+    target.material = matTntLit;
+    let blinkState = false;
+    if (fuseMs > 180) {
+        const blinkId = window.setInterval(() => {
+            blinkState = !blinkState;
+            target.material = blinkState ? matTnt : matTntLit;
+        }, Math.max(120, fuseMs / 6));
+        activeTntBlinkers.set(target, blinkId);
+    }
+    const timeoutId = window.setTimeout(() => {
+        activeTntFuses.delete(target);
+        const blinkId = activeTntBlinkers.get(target);
+        if (blinkId !== undefined) {
+            window.clearInterval(blinkId);
+            activeTntBlinkers.delete(target);
+        }
+        target.material = matTntLit;
+        explodeTnt(target);
+    }, fuseMs);
+    activeTntFuses.set(target, timeoutId);
+}
+
+function explodeTnt(origin: any) {
+    if (!origin || !origin.position) return;
+    const center = origin.position.clone ? origin.position.clone() : new THREE.Vector3(origin.position.x, origin.position.y, origin.position.z);
+    removeBlock(origin);
+    createExplosionEffect(center);
+    const radiusSq = TNT_EXPLOSION_RADIUS * TNT_EXPLOSION_RADIUS;
+    const snapshot = objects.slice();
+    snapshot.forEach((candidate) => {
+        if (!candidate || !candidate.position) return;
+        const dx = candidate.position.x - center.x;
+        const dy = candidate.position.y - center.y;
+        const dz = candidate.position.z - center.z;
+        if ((dx * dx + dy * dy + dz * dz) > radiusSq) return;
+        const key = candidate.userData?.blockKey;
+        if (key === 'obsidian') return;
+        if (key === 'tnt') {
+            igniteTnt(candidate, Math.max(400, TNT_CHAIN_FUSE_MS));
+            return;
+        }
+        removeBlock(candidate);
+    });
+}
+
+function createExplosionEffect(center: any) {
+    const light = new THREE.PointLight(0xffaa55, 2.8, TNT_EXPLOSION_RADIUS * 3.2);
+    light.position.copy(center);
+    scene.add(light);
+    window.setTimeout(() => scene.remove(light), 200);
+    const spriteMaterial = new THREE.SpriteMaterial({ color: 0xffaa55, transparent: true, opacity: 0.45, depthWrite: false });
+    const sprite = new THREE.Sprite(spriteMaterial);
+    sprite.position.copy(center);
+    const size = TNT_EXPLOSION_RADIUS * 2;
+    sprite.scale.set(size, size, 1);
+    scene.add(sprite);
+    window.setTimeout(() => {
+        sprite.material.opacity = 0.2;
+        sprite.scale.set(size * 1.35, size * 1.35, 1);
+    }, 90);
+    window.setTimeout(() => {
+        scene.remove(sprite);
+        spriteMaterial.dispose?.();
+    }, 220);
+}
+
 // 物理・接地判定用レイ（編集とは別に持つ）
 const groundRay = new THREE.Raycaster();
 const sideRay = new THREE.Raycaster();
@@ -514,11 +638,14 @@ document.addEventListener('mousedown', (event) => {
             scene.add(newCube);
             objects.push(newCube);
             persistEdit(newCube.position, blockKey);
-        } else if (event.button === 0) { // 左クリック: ブロックを壊す
+        } else if (event.button === 0) { // 左クリック: ブロックを壊す / TNT を点火
             if (intersect.object !== scene) {
-                persistEdit(intersect.object.position, null);
-                scene.remove(intersect.object);
-                objects.splice(objects.indexOf(intersect.object), 1);
+                const key = intersect.object.userData?.blockKey;
+                if (key === 'tnt') {
+                    igniteTnt(intersect.object);
+                } else {
+                    removeBlock(intersect.object);
+                }
             }
         }
     }
